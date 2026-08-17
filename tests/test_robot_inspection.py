@@ -2,15 +2,17 @@ from types import SimpleNamespace
 
 import pytest
 
+from tcc_real_robot.reporting import (
+    format_current_position_hold_report,
+    format_position_hold_report,
+    format_preflight_report,
+)
 from tcc_real_robot.robot_inspection import (
     inspect_robot,
     monitor_robot,
     preflight_robot,
+    run_current_position_hold_test,
     run_position_hold_test,
-)
-from tcc_real_robot.reporting import (
-    format_position_hold_report,
-    format_preflight_report,
 )
 
 
@@ -19,6 +21,7 @@ class FakeDriver:
         self.configure_args = None
         self.cleaned_up = False
         self.mode_calls: list[object] = []
+        self.position_calls: list[tuple[list[float], float, bool]] = []
 
     def configure(self, *args: object) -> None:
         self.configure_args = args
@@ -70,6 +73,11 @@ class FakeDriver:
     def set_all_modes(self, mode: object) -> None:
         self.mode_calls.append(mode)
 
+    def set_all_positions(
+        self, positions: list[float], goal_time: float, blocking: bool
+    ) -> None:
+        self.position_calls.append((positions, goal_time, blocking))
+
     def get_modes(self) -> list[SimpleNamespace]:
         value = 1 if self.mode_calls and self.mode_calls[-1] == "position" else 0
         return [SimpleNamespace(value=value)] * 7
@@ -103,7 +111,14 @@ def make_config() -> dict[str, object]:
                 "sample_rate_hz": 1000.0,
                 "max_arm_drift_rad": 0.02,
                 "max_gripper_drift_m": 0.002,
-            }
+            },
+            "current_position_hold": {
+                "goal_time_s": 0.001,
+                "duration_s": 0.001,
+                "sample_rate_hz": 1000.0,
+                "max_arm_error_rad": 0.02,
+                "max_gripper_error_m": 0.002,
+            },
         },
     }
 
@@ -200,6 +215,42 @@ def test_position_hold_changes_only_modes_and_cleans_up() -> None:
     assert driver.cleaned_up is True
 
 
+def test_current_position_hold_commands_unchanged_target_and_cleans_up() -> None:
+    driver = FakeDriver()
+    driver.get_error_information = lambda: "No error"  # type: ignore[method-assign]
+
+    report = run_current_position_hold_test(
+        make_api(driver), make_config(), timeout=3.0
+    )
+
+    target = [0.0] * 6 + [0.02]
+    assert report["passed"] is True
+    assert driver.mode_calls == ["position", "idle"]
+    assert driver.position_calls == [(target, 0.001, True)]
+    assert report["target_positions"] == target
+    assert report["peak_arm_error_rad"] == 0.0
+    assert report["peak_gripper_error_m"] == 0.0
+    assert driver.cleaned_up is True
+
+
+def test_current_position_hold_returns_to_idle_when_command_fails() -> None:
+    driver = FakeDriver()
+    driver.get_error_information = lambda: "No error"  # type: ignore[method-assign]
+
+    def fail_command(
+        positions: list[float], goal_time: float, blocking: bool
+    ) -> None:
+        raise RuntimeError("command failed")
+
+    driver.set_all_positions = fail_command  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="command failed"):
+        run_current_position_hold_test(make_api(driver), make_config(), timeout=3.0)
+
+    assert driver.mode_calls == ["position", "idle"]
+    assert driver.cleaned_up is True
+
+
 def test_text_reports_include_operator_summary() -> None:
     driver = FakeDriver()
     preflight = preflight_robot(make_api(driver), make_config(), timeout=3.0)
@@ -215,3 +266,13 @@ def test_text_reports_include_operator_summary() -> None:
     hold_text = format_position_hold_report(hold)
     assert "Overall: PASS" in hold_text
     assert "No position, velocity, or effort target was sent." in hold_text
+
+    current_driver = FakeDriver()
+    current_driver.get_error_information = lambda: "No error"  # type: ignore[method-assign]
+    current = run_current_position_hold_test(
+        make_api(current_driver), make_config(), timeout=3.0
+    )
+    current["captured_at"] = "2026-08-17T07:00:00+00:00"
+    current_text = format_current_position_hold_report(current)
+    assert "Overall: PASS" in current_text
+    assert "sent back unchanged as the target" in current_text

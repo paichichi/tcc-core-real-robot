@@ -361,9 +361,156 @@ def run_position_hold_test(
         }
     finally:
         if configured:
-            if position_mode_requested:
-                try:
+            try:
+                if position_mode_requested:
                     driver.set_all_modes(driver_api.Mode.idle)
-                except Exception:
-                    pass
-            driver.cleanup(False)
+            finally:
+                driver.cleanup(False)
+
+
+def run_current_position_hold_test(
+    driver_api: Any,
+    config: dict[str, Any],
+    timeout: float,
+) -> dict[str, Any]:
+    """Read the current pose, command that same pose, and measure tracking error."""
+    robot = config["robot"]
+    settings = config["diagnostic_tests"]["current_position_hold"]
+    goal_time = float(settings["goal_time_s"])
+    duration = float(settings["duration_s"])
+    rate_hz = float(settings["sample_rate_hz"])
+    max_arm_error = float(settings["max_arm_error_rad"])
+    max_gripper_error = float(settings["max_gripper_error_m"])
+    if min(
+        goal_time,
+        duration,
+        rate_hz,
+        max_arm_error,
+        max_gripper_error,
+    ) <= 0:
+        raise ValueError("Current-position hold settings must be positive")
+
+    model = getattr(driver_api.Model, robot["driver_model"])
+    end_effector = getattr(driver_api.StandardEndEffector, robot["end_effector"])
+    driver = driver_api.TrossenArmDriver()
+    configured = False
+    position_mode_requested = False
+
+    try:
+        driver.configure(
+            model,
+            end_effector,
+            robot["controller_ip"],
+            False,
+            timeout,
+        )
+        configured = True
+        driver_version, firmware_version = _validate_versions(driver, robot)
+        error_information = str(driver.get_error_information())
+        modes_before = [
+            getattr(mode, "value", str(mode)) for mode in driver.get_modes()
+        ]
+        if error_information != "No error":
+            raise RuntimeError(f"Controller reports an error: {error_information}")
+        if len(modes_before) != 7 or not all(
+            mode in (0, "idle") for mode in modes_before
+        ):
+            raise RuntimeError(f"All joints must start idle; got {modes_before}")
+
+        target = [float(value) for value in driver.get_all_positions()]
+        if len(target) != 7 or not all(isfinite(value) for value in target):
+            raise RuntimeError("Expected seven finite initial joint positions")
+
+        limits = driver.get_joint_limits()
+        if len(limits) != 7 or not all(
+            float(limit.position_min) - float(limit.position_tolerance)
+            <= position
+            <= float(limit.position_max) + float(limit.position_tolerance)
+            for position, limit in zip(target, limits, strict=True)
+        ):
+            raise RuntimeError("Initial positions are outside controller limits")
+
+        driver.set_all_modes(driver_api.Mode.position)
+        position_mode_requested = True
+        driver.set_all_positions(target, goal_time, True)
+
+        modes_during = [
+            getattr(mode, "value", str(mode)) for mode in driver.get_modes()
+        ]
+        position_value = getattr(driver_api.Mode.position, "value", 1)
+        if len(modes_during) != 7 or not all(
+            mode == position_value for mode in modes_during
+        ):
+            raise RuntimeError(f"Position mode was not applied: {modes_during}")
+
+        samples = max(1, round(duration * rate_hz))
+        period = 1.0 / rate_hz
+        started = time.monotonic()
+        peak_arm_error = 0.0
+        peak_gripper_error = 0.0
+        final = target
+        for index in range(samples):
+            final = [float(value) for value in driver.get_all_positions()]
+            if len(final) != 7 or not all(isfinite(value) for value in final):
+                raise RuntimeError("Received invalid joint positions during hold")
+            peak_arm_error = max(
+                peak_arm_error,
+                max(
+                    abs(current - goal)
+                    for goal, current in zip(target[:6], final[:6], strict=True)
+                ),
+            )
+            peak_gripper_error = max(
+                peak_gripper_error,
+                abs(final[6] - target[6]),
+            )
+            if peak_arm_error > max_arm_error:
+                raise RuntimeError(
+                    f"Arm error {peak_arm_error:.6f} rad exceeded "
+                    f"{max_arm_error:.6f} rad"
+                )
+            if peak_gripper_error > max_gripper_error:
+                raise RuntimeError(
+                    f"Gripper error {peak_gripper_error:.6f} m exceeded "
+                    f"{max_gripper_error:.6f} m"
+                )
+            deadline = started + (index + 1) * period
+            remaining = deadline - time.monotonic()
+            if remaining > 0 and index + 1 < samples:
+                time.sleep(remaining)
+
+        driver.set_all_modes(driver_api.Mode.idle)
+        position_mode_requested = False
+        modes_after = [
+            getattr(mode, "value", str(mode)) for mode in driver.get_modes()
+        ]
+        passed = len(modes_after) == 7 and all(
+            mode in (0, "idle") for mode in modes_after
+        )
+        return {
+            "passed": passed,
+            "controller_ip": robot["controller_ip"],
+            "driver_version": driver_version,
+            "firmware_version": firmware_version,
+            "error_information": error_information,
+            "goal_time_s": goal_time,
+            "duration_s": duration,
+            "sample_rate_hz": rate_hz,
+            "samples": samples,
+            "modes_before": modes_before,
+            "modes_during": modes_during,
+            "modes_after": modes_after,
+            "target_positions": target,
+            "final_positions": final,
+            "peak_arm_error_rad": peak_arm_error,
+            "peak_gripper_error_m": peak_gripper_error,
+            "max_allowed_arm_error_rad": max_arm_error,
+            "max_allowed_gripper_error_m": max_gripper_error,
+        }
+    finally:
+        if configured:
+            try:
+                if position_mode_requested:
+                    driver.set_all_modes(driver_api.Mode.idle)
+            finally:
+                driver.cleanup(False)

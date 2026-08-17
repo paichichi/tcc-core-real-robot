@@ -65,6 +65,11 @@ After a passing preflight and an on-site safety check, the explicitly gated
 position-mode hold diagnostic can be run with
 `python scripts/test_position_hold.py --execute`. It sends no motion target.
 
+If that diagnostic passes, the next gated test is
+`python scripts/test_current_position_hold.py --execute`. It reads the current
+seven-joint position and sends that exact value back as the position target;
+it does not add an offset.
+
 `inspect_robot.py` follows the vendor's configure/read/cleanup lifecycle. It
 does not clear controller faults, change joint modes, or send motion commands.
 `monitor_robot.py` applies the same restrictions while sampling state repeatedly.

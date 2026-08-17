@@ -84,7 +84,44 @@ def format_position_hold_report(report: dict[str, Any]) -> str:
         f"Peak arm drift: {_format_value(report['peak_arm_drift_rad'])} rad",
         f"Allowed arm drift: {_format_value(report['max_allowed_arm_drift_rad'])} rad",
         f"Peak gripper drift: {_format_value(report['peak_gripper_drift_m'])} m",
-        "Allowed gripper drift: "
-        f"{_format_value(report['max_allowed_gripper_drift_m'])} m",
+        f"Allowed gripper drift: {_format_value(report['max_allowed_gripper_drift_m'])} m",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def format_current_position_hold_report(report: dict[str, Any]) -> str:
+    """Format a commanded current-position hold diagnostic."""
+    lines = [
+        "TCC-Core Current-Position Hold Report",
+        "=" * 37,
+        f"Overall: {'PASS' if report['passed'] else 'FAIL'}",
+        f"Captured at: {report['captured_at']}",
+        f"Controller IP: {report['controller_ip']}",
+        f"Driver version: {report['driver_version']}",
+        f"Firmware version: {report['firmware_version']}",
+        f"Controller error: {report['error_information']}",
+        "",
+        "Test configuration",
+        "------------------",
+        f"Goal time: {_format_value(report['goal_time_s'])} s",
+        f"Observation duration: {_format_value(report['duration_s'])} s",
+        f"Sample rate: {_format_value(report['sample_rate_hz'])} Hz",
+        f"Samples: {report['samples']}",
+        "The measured current position was sent back unchanged as the target.",
+        "",
+        "Mode transition",
+        "---------------",
+        f"Before: {report['modes_before']}",
+        f"During: {report['modes_during']}",
+        f"After:  {report['modes_after']}",
+        "",
+        "Command and tracking error",
+        "--------------------------",
+        f"Target: {report['target_positions']}",
+        f"Final:  {report['final_positions']}",
+        f"Peak arm error: {_format_value(report['peak_arm_error_rad'])} rad",
+        f"Allowed arm error: {_format_value(report['max_allowed_arm_error_rad'])} rad",
+        f"Peak gripper error: {_format_value(report['peak_gripper_error_m'])} m",
+        f"Allowed gripper error: {_format_value(report['max_allowed_gripper_error_m'])} m",
     ]
     return "\n".join(lines) + "\n"
