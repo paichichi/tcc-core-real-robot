@@ -1,11 +1,13 @@
 robot:
   model: trossen_ai_solo
   role: follower
+  driver_model: wxai_v0
+  end_effector: wxai_v0_follower_20250509
   controller_ip: 192.168.1.2
   host_ip: 192.168.1.1
   subnet_prefix: 24
-  driver_version: TBD
-  firmware_version: TBD
+  expected_driver_series: "1.9"
+  expected_firmware_series: "1.9"
 
 action_contract:
   dimensions: 7

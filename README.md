@@ -55,8 +55,12 @@ These commands do not send robot motion commands:
 ```bash
 python scripts/audit_dataset.py --metadata-only
 python scripts/check_robot_network.py
+python scripts/inspect_robot.py
 pytest
 ```
+
+`inspect_robot.py` follows the vendor's configure/read/cleanup lifecycle. It
+does not clear controller faults, change joint modes, or send motion commands.
 
 Before any future actuation, complete every item in [docs/SAFETY.md](docs/SAFETY.md).
 

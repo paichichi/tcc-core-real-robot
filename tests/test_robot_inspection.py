@@ -1,0 +1,84 @@
+from types import SimpleNamespace
+
+import pytest
+
+from tcc_real_robot.robot_inspection import inspect_robot
+
+
+class FakeDriver:
+    def __init__(self) -> None:
+        self.configure_args = None
+        self.cleaned_up = False
+
+    def configure(self, *args: object) -> None:
+        self.configure_args = args
+
+    def get_driver_version(self) -> str:
+        return "v1.9.0"
+
+    def get_controller_version(self) -> str:
+        return "v1.9.2"
+
+    def get_num_joints(self) -> int:
+        return 7
+
+    def get_modes(self) -> list[SimpleNamespace]:
+        return [SimpleNamespace(value="idle")] * 7
+
+    def get_arm_positions(self) -> list[float]:
+        return [0.0] * 6
+
+    def get_gripper_position(self) -> float:
+        return 0.02
+
+    def cleanup(self, reboot_controller: bool) -> None:
+        assert reboot_controller is False
+        self.cleaned_up = True
+
+
+def make_api(driver: FakeDriver) -> SimpleNamespace:
+    return SimpleNamespace(
+        Model=SimpleNamespace(wxai_v0="model"),
+        StandardEndEffector=SimpleNamespace(
+            wxai_v0_follower_20250509="end-effector"
+        ),
+        TrossenArmDriver=lambda: driver,
+    )
+
+
+def make_config() -> dict[str, object]:
+    return {
+        "robot": {
+            "driver_model": "wxai_v0",
+            "end_effector": "wxai_v0_follower_20250509",
+            "controller_ip": "192.168.1.2",
+            "expected_driver_series": "1.9",
+            "expected_firmware_series": "1.9",
+        }
+    }
+
+
+def test_inspection_is_read_only_and_cleans_up() -> None:
+    driver = FakeDriver()
+    state = inspect_robot(make_api(driver), make_config(), timeout=3.0)
+
+    assert driver.configure_args == (
+        "model",
+        "end-effector",
+        "192.168.1.2",
+        False,
+        3.0,
+    )
+    assert driver.cleaned_up is True
+    assert state["arm_positions_rad"] == [0.0] * 6
+    assert state["gripper_position_m"] == 0.02
+
+
+def test_inspection_rejects_unexpected_firmware_series_and_cleans_up() -> None:
+    driver = FakeDriver()
+    driver.get_controller_version = lambda: "v1.10.0"  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="Firmware"):
+        inspect_robot(make_api(driver), make_config(), timeout=3.0)
+
+    assert driver.cleaned_up is True
