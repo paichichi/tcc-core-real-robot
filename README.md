@@ -56,11 +56,13 @@ These commands do not send robot motion commands:
 python scripts/audit_dataset.py --metadata-only
 python scripts/check_robot_network.py
 python scripts/inspect_robot.py
+python scripts/monitor_robot.py --duration 5 --rate 20
 pytest
 ```
 
 `inspect_robot.py` follows the vendor's configure/read/cleanup lifecycle. It
 does not clear controller faults, change joint modes, or send motion commands.
+`monitor_robot.py` applies the same restrictions while sampling state repeatedly.
 
 Before any future actuation, complete every item in [docs/SAFETY.md](docs/SAFETY.md).
 

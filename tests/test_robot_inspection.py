@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from tcc_real_robot.robot_inspection import inspect_robot
+from tcc_real_robot.robot_inspection import inspect_robot, monitor_robot
 
 
 class FakeDriver:
@@ -79,4 +79,23 @@ def test_inspection_rejects_unexpected_firmware_series_and_cleans_up() -> None:
     with pytest.raises(RuntimeError, match="Firmware"):
         inspect_robot(make_api(driver), make_config(), timeout=3.0)
 
+    assert driver.cleaned_up is True
+
+
+def test_monitor_reads_only_and_cleans_up() -> None:
+    driver = FakeDriver()
+    samples: list[dict[str, object]] = []
+
+    summary = monitor_robot(
+        make_api(driver),
+        make_config(),
+        timeout=3.0,
+        duration=0.001,
+        rate_hz=1000.0,
+        on_sample=samples.append,
+    )
+
+    assert len(samples) == 1
+    assert summary["samples"] == 1
+    assert summary["max_arm_change_rad"] == 0.0
     assert driver.cleaned_up is True
