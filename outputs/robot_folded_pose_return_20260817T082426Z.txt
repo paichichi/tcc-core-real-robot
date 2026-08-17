@@ -1,0 +1,38 @@
+TCC-Core Folded-Pose Return Report
+==================================
+Overall: PASS
+Captured at: 2026-08-17T08:24:26.069591+00:00
+Controller IP: 192.168.1.4
+Driver version: 1.9.3
+Firmware version: 1.9.2
+Controller error before: No error
+Controller error after move: No error
+Controller error after: No error
+
+Test configuration
+------------------
+Required start: dataset_collection_home
+Required start positions: [-0.00019073777366429567, 1.046196699142456, 0.5239566564559937, 0.6292439103126526, -0.000572213320992887, 0.00019073777366429567] rad
+Initial positions: [-0.001716639962978661, 1.0759518146514893, 0.4659723937511444, 0.5750743746757507, -0.0013351644156500697, -0.000572213320992887] rad
+Start absolute errors: [0.0015259021893143654, 0.029755115509033203, 0.05798426270484924, 0.054169535636901855, 0.0007629510946571827, 0.0007629510946571827] rad
+Target: pre_dataset_home_folded_pose
+Target source: cartesian_step_z_positive_20260817T080707Z_initial_state
+Target positions: [0.02193484455347061, 0.0, 0.0, -0.018120087683200836, -0.0078202486038208, 0.07953765243291855] rad
+Move time: 10.000000000 s
+Maximum tracking error: 0.030000000 rad
+The six arm joints moved in joint space; the gripper stayed idle.
+
+Mode transition
+---------------
+Before: [0, 0, 0, 0, 0, 0, 0]
+During: [1, 1, 1, 1, 1, 1, 0]
+After:  [0, 0, 0, 0, 0, 0, 0]
+
+Result
+------
+Observed positions: [0.02193484455347061, -0.00019073777366429567, 0.0013351644156500697, -0.01430533267557621, -0.0078202486038208, 0.07953765243291855] rad
+Tracking errors: [0.0, 0.00019073777366429567, 0.0013351644156500697, 0.003814755007624626, 0.0, 0.0] rad
+
+Failure reasons
+---------------
+None
