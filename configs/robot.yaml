@@ -22,3 +22,10 @@ safety:
   workspace_limits: TBD
   max_joint_delta_rad: TBD
   max_joint_velocity_rad_s: TBD
+
+diagnostic_tests:
+  position_hold:
+    duration_s: 2.0
+    sample_rate_hz: 20.0
+    max_arm_drift_rad: 0.02
+    max_gripper_drift_m: 0.002

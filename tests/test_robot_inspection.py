@@ -2,13 +2,23 @@ from types import SimpleNamespace
 
 import pytest
 
-from tcc_real_robot.robot_inspection import inspect_robot, monitor_robot, preflight_robot
+from tcc_real_robot.robot_inspection import (
+    inspect_robot,
+    monitor_robot,
+    preflight_robot,
+    run_position_hold_test,
+)
+from tcc_real_robot.reporting import (
+    format_position_hold_report,
+    format_preflight_report,
+)
 
 
 class FakeDriver:
     def __init__(self) -> None:
         self.configure_args = None
         self.cleaned_up = False
+        self.mode_calls: list[object] = []
 
     def configure(self, *args: object) -> None:
         self.configure_args = args
@@ -21,9 +31,6 @@ class FakeDriver:
 
     def get_num_joints(self) -> int:
         return 7
-
-    def get_modes(self) -> list[SimpleNamespace]:
-        return [SimpleNamespace(value="idle")] * 7
 
     def get_arm_positions(self) -> list[float]:
         return [0.0] * 6
@@ -60,6 +67,13 @@ class FakeDriver:
     def get_error_information(self) -> str:
         return "none"
 
+    def set_all_modes(self, mode: object) -> None:
+        self.mode_calls.append(mode)
+
+    def get_modes(self) -> list[SimpleNamespace]:
+        value = 1 if self.mode_calls and self.mode_calls[-1] == "position" else 0
+        return [SimpleNamespace(value=value)] * 7
+
     def cleanup(self, reboot_controller: bool) -> None:
         assert reboot_controller is False
         self.cleaned_up = True
@@ -69,6 +83,7 @@ def make_api(driver: FakeDriver) -> SimpleNamespace:
     return SimpleNamespace(
         Model=SimpleNamespace(wxai_v0="model"),
         StandardEndEffector=SimpleNamespace(wxai_v0_follower="end-effector"),
+        Mode=SimpleNamespace(position="position", idle="idle"),
         TrossenArmDriver=lambda: driver,
     )
 
@@ -81,7 +96,15 @@ def make_config() -> dict[str, object]:
             "controller_ip": "192.168.1.2",
             "expected_driver_series": "1.9",
             "expected_firmware_series": "1.9",
-        }
+        },
+        "diagnostic_tests": {
+            "position_hold": {
+                "duration_s": 0.001,
+                "sample_rate_hz": 1000.0,
+                "max_arm_drift_rad": 0.02,
+                "max_gripper_drift_m": 0.002,
+            }
+        },
     }
 
 
@@ -162,3 +185,33 @@ def test_preflight_rejects_position_outside_limits() -> None:
     assert report["passed"] is False
     assert report["checks"]["positions_within_limits_and_tolerance"] is False
     assert driver.cleaned_up is True
+
+
+def test_position_hold_changes_only_modes_and_cleans_up() -> None:
+    driver = FakeDriver()
+    driver.get_error_information = lambda: "No error"  # type: ignore[method-assign]
+
+    report = run_position_hold_test(make_api(driver), make_config(), timeout=3.0)
+
+    assert report["passed"] is True
+    assert driver.mode_calls == ["position", "idle"]
+    assert report["peak_arm_drift_rad"] == 0.0
+    assert report["peak_gripper_drift_m"] == 0.0
+    assert driver.cleaned_up is True
+
+
+def test_text_reports_include_operator_summary() -> None:
+    driver = FakeDriver()
+    preflight = preflight_robot(make_api(driver), make_config(), timeout=3.0)
+    preflight["captured_at"] = "2026-08-17T07:00:00+00:00"
+    preflight_text = format_preflight_report(preflight)
+    assert "Overall: PASS" in preflight_text
+    assert "Joint state and limits" in preflight_text
+
+    hold_driver = FakeDriver()
+    hold_driver.get_error_information = lambda: "No error"  # type: ignore[method-assign]
+    hold = run_position_hold_test(make_api(hold_driver), make_config(), timeout=3.0)
+    hold["captured_at"] = "2026-08-17T07:00:00+00:00"
+    hold_text = format_position_hold_report(hold)
+    assert "Overall: PASS" in hold_text
+    assert "No position, velocity, or effort target was sent." in hold_text

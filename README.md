@@ -61,6 +61,10 @@ python scripts/robot_preflight.py
 pytest
 ```
 
+After a passing preflight and an on-site safety check, the explicitly gated
+position-mode hold diagnostic can be run with
+`python scripts/test_position_hold.py --execute`. It sends no motion target.
+
 `inspect_robot.py` follows the vendor's configure/read/cleanup lifecycle. It
 does not clear controller faults, change joint modes, or send motion commands.
 `monitor_robot.py` applies the same restrictions while sampling state repeatedly.
