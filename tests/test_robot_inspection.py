@@ -3,16 +3,23 @@ from types import SimpleNamespace
 import pytest
 
 from tcc_real_robot.reporting import (
+    format_cartesian_step_report,
     format_current_position_hold_report,
+    format_gripper_cycle_report,
     format_position_hold_report,
     format_preflight_report,
+    format_whole_arm_cycle_report,
+    format_workspace_point_report,
 )
 from tcc_real_robot.robot_inspection import (
     inspect_robot,
     monitor_robot,
     preflight_robot,
+    run_cartesian_step_test,
     run_current_position_hold_test,
+    run_gripper_cycle_test,
     run_position_hold_test,
+    run_whole_arm_cycle_test,
 )
 
 
@@ -22,6 +29,15 @@ class FakeDriver:
         self.cleaned_up = False
         self.mode_calls: list[object] = []
         self.position_calls: list[tuple[list[float], float, bool]] = []
+        self.arm_mode_calls: list[object] = []
+        self.gripper_mode_calls: list[object] = []
+        self.arm_position_calls: list[tuple[list[float], float, bool]] = []
+        self.gripper_position_calls: list[tuple[float, float, bool]] = []
+        self.cartesian_position_calls: list[tuple[list[float], object, float, bool, int]] = []
+        self.joint_modes = [0] * 7
+        self.arm_positions = [0.0] * 6
+        self.gripper_position = 0.02
+        self.cartesian_positions = [0.3, 0.0, 0.2, 0.0, 0.0, 0.0]
 
     def configure(self, *args: object) -> None:
         self.configure_args = args
@@ -36,13 +52,13 @@ class FakeDriver:
         return 7
 
     def get_arm_positions(self) -> list[float]:
-        return [0.0] * 6
+        return self.arm_positions.copy()
 
     def get_gripper_position(self) -> float:
-        return 0.02
+        return self.gripper_position
 
     def get_all_positions(self) -> list[float]:
-        return [0.0] * 6 + [0.02]
+        return self.arm_positions.copy() + [self.gripper_position]
 
     def get_all_rotor_temperatures(self) -> list[float]:
         return [30.0] * 7
@@ -51,7 +67,7 @@ class FakeDriver:
         return [31.0] * 7
 
     def get_cartesian_positions(self) -> list[float]:
-        return [0.3, 0.0, 0.2, 0.0, 0.0, 0.0]
+        return self.cartesian_positions.copy()
 
     def get_joint_limits(self) -> list[SimpleNamespace]:
         return [
@@ -72,15 +88,59 @@ class FakeDriver:
 
     def set_all_modes(self, mode: object) -> None:
         self.mode_calls.append(mode)
+        value = 1 if mode == "position" else 0
+        self.joint_modes = [value] * 7
+
+    def set_arm_modes(self, mode: object) -> None:
+        self.arm_mode_calls.append(mode)
+        value = 1 if mode == "position" else 0
+        self.joint_modes[:6] = [value] * 6
+
+    def set_gripper_mode(self, mode: object) -> None:
+        self.gripper_mode_calls.append(mode)
+        self.joint_modes[6] = 1 if mode == "position" else 0
 
     def set_all_positions(
         self, positions: list[float], goal_time: float, blocking: bool
     ) -> None:
         self.position_calls.append((positions, goal_time, blocking))
+        self.arm_positions = positions[:6].copy()
+        self.gripper_position = positions[6]
+
+    def set_arm_positions(
+        self, positions: list[float], goal_time: float, blocking: bool
+    ) -> None:
+        self.arm_position_calls.append((positions.copy(), goal_time, blocking))
+        self.arm_positions = positions.copy()
+
+    def set_gripper_position(
+        self, position: float, goal_time: float, blocking: bool
+    ) -> None:
+        self.gripper_position_calls.append((position, goal_time, blocking))
+        self.gripper_position = position
+
+    def set_cartesian_positions(
+        self,
+        positions: list[float],
+        interpolation_space: object,
+        *,
+        goal_time: float,
+        blocking: bool,
+        num_trajectory_check_samples: int,
+    ) -> None:
+        self.cartesian_position_calls.append(
+            (
+                positions.copy(),
+                interpolation_space,
+                goal_time,
+                blocking,
+                num_trajectory_check_samples,
+            )
+        )
+        self.cartesian_positions = positions.copy()
 
     def get_modes(self) -> list[SimpleNamespace]:
-        value = 1 if self.mode_calls and self.mode_calls[-1] == "position" else 0
-        return [SimpleNamespace(value=value)] * 7
+        return [SimpleNamespace(value=value) for value in self.joint_modes]
 
     def cleanup(self, reboot_controller: bool) -> None:
         assert reboot_controller is False
@@ -92,6 +152,7 @@ def make_api(driver: FakeDriver) -> SimpleNamespace:
         Model=SimpleNamespace(wxai_v0="model"),
         StandardEndEffector=SimpleNamespace(wxai_v0_follower="end-effector"),
         Mode=SimpleNamespace(position="position", idle="idle"),
+        InterpolationSpace=SimpleNamespace(cartesian="cartesian"),
         TrossenArmDriver=lambda: driver,
     )
 
@@ -118,6 +179,29 @@ def make_config() -> dict[str, object]:
                 "sample_rate_hz": 1000.0,
                 "max_arm_error_rad": 0.02,
                 "max_gripper_error_m": 0.002,
+            },
+            "gripper_cycle": {
+                "open_delta_m": 0.005,
+                "goal_time_s": 0.001,
+                "hold_duration_s": 0.001,
+                "sample_rate_hz": 1000.0,
+                "max_tracking_error_m": 0.001,
+            },
+            "whole_arm_cycle": {
+                "joint_deltas_rad": [0.03] * 6,
+                "goal_time_s": 0.001,
+                "hold_duration_s": 0.001,
+                "sample_rate_hz": 1000.0,
+                "max_tracking_error_rad": 0.02,
+                "joint_limit_margin_rad": 0.01,
+            },
+            "cartesian_step": {
+                "goal_time_s": 0.001,
+                "hold_duration_s": 0.001,
+                "max_translation_step_m": 0.01,
+                "max_downward_step_m": 0.005,
+                "max_tracking_error_m": 0.005,
+                "trajectory_check_samples": 1000,
             },
         },
     }
@@ -279,6 +363,85 @@ def test_current_position_hold_stops_and_reports_excessive_error() -> None:
     assert driver.cleaned_up is True
 
 
+def test_gripper_cycle_moves_only_gripper_and_returns() -> None:
+    driver = FakeDriver()
+    driver.get_error_information = lambda: "No error"  # type: ignore[method-assign]
+
+    report = run_gripper_cycle_test(make_api(driver), make_config(), timeout=3.0)
+
+    assert report["passed"] is True
+    assert driver.arm_mode_calls == []
+    assert driver.gripper_mode_calls == ["position", "idle"]
+    assert driver.gripper_position_calls == [
+        (0.025, 0.001, True),
+        (0.02, 0.001, True),
+    ]
+    assert report["return_error_m"] == 0.0
+    assert driver.cleaned_up is True
+
+
+def test_whole_arm_cycle_moves_all_arm_joints_and_returns() -> None:
+    driver = FakeDriver()
+    driver.get_error_information = lambda: "No error"  # type: ignore[method-assign]
+
+    report = run_whole_arm_cycle_test(
+        make_api(driver), make_config(), timeout=3.0
+    )
+
+    assert report["passed"] is True
+    assert driver.arm_mode_calls == ["position", "idle"]
+    assert driver.gripper_mode_calls == []
+    assert driver.arm_position_calls == [
+        ([0.03] * 6, 0.001, True),
+        ([0.0] * 6, 0.001, True),
+    ]
+    assert report["peak_outbound_errors_rad"] == [0.0] * 6
+    assert report["return_errors_rad"] == [0.0] * 6
+    assert driver.cleaned_up is True
+
+
+def test_cartesian_step_moves_positive_z_and_returns() -> None:
+    driver = FakeDriver()
+    driver.get_error_information = lambda: "No error"  # type: ignore[method-assign]
+
+    report = run_cartesian_step_test(
+        make_api(driver),
+        make_config(),
+        timeout=3.0,
+        axis="z",
+        distance_m=0.01,
+    )
+
+    origin = [0.3, 0.0, 0.2, 0.0, 0.0, 0.0]
+    target = origin.copy()
+    target[2] += 0.01
+    assert report["passed"] is True
+    assert driver.arm_mode_calls == ["position", "idle"]
+    assert driver.gripper_mode_calls == []
+    assert driver.cartesian_position_calls == [
+        (target, "cartesian", 0.001, True, 1000),
+        (origin, "cartesian", 0.001, True, 1000),
+    ]
+    assert report["target_errors"] == [0.0] * 6
+    assert report["return_errors"] == [0.0] * 6
+    assert driver.cleaned_up is True
+
+
+def test_cartesian_step_rejects_excessive_downward_motion() -> None:
+    driver = FakeDriver()
+
+    with pytest.raises(ValueError, match="exceeds"):
+        run_cartesian_step_test(
+            make_api(driver),
+            make_config(),
+            timeout=3.0,
+            axis="z",
+            distance_m=-0.01,
+        )
+
+    assert driver.configure_args is None
+
+
 def test_text_reports_include_operator_summary() -> None:
     driver = FakeDriver()
     preflight = preflight_robot(make_api(driver), make_config(), timeout=3.0)
@@ -305,3 +468,36 @@ def test_text_reports_include_operator_summary() -> None:
     assert "Overall: PASS" in current_text
     assert "sent back unchanged as the target" in current_text
     assert "Failure reasons\n---------------\nNone" in current_text
+
+    gripper_driver = FakeDriver()
+    gripper_driver.get_error_information = lambda: "No error"  # type: ignore[method-assign]
+    gripper = run_gripper_cycle_test(
+        make_api(gripper_driver), make_config(), timeout=3.0
+    )
+    gripper["captured_at"] = "2026-08-17T07:00:00+00:00"
+    assert "Overall: PASS" in format_gripper_cycle_report(gripper)
+
+    arm_driver = FakeDriver()
+    arm_driver.get_error_information = lambda: "No error"  # type: ignore[method-assign]
+    arm = run_whole_arm_cycle_test(make_api(arm_driver), make_config(), timeout=3.0)
+    arm["captured_at"] = "2026-08-17T07:00:00+00:00"
+    assert "Overall: PASS" in format_whole_arm_cycle_report(arm)
+
+    cartesian_driver = FakeDriver()
+    cartesian_driver.get_error_information = lambda: "No error"  # type: ignore[method-assign]
+    cartesian = run_cartesian_step_test(
+        make_api(cartesian_driver),
+        make_config(),
+        timeout=3.0,
+        axis="z",
+        distance_m=0.01,
+    )
+    cartesian["captured_at"] = "2026-08-17T07:00:00+00:00"
+    assert "Overall: PASS" in format_cartesian_step_report(cartesian)
+
+    workspace = preflight_robot(make_api(FakeDriver()), make_config(), timeout=3.0)
+    workspace["label"] = "task_center"
+    workspace["captured_at"] = "2026-08-17T07:00:00+00:00"
+    workspace_text = format_workspace_point_report(workspace)
+    assert "Label: task_center" in workspace_text
+    assert "sent no motion command" in workspace_text

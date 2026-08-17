@@ -70,11 +70,33 @@ If that diagnostic passes, the next gated test is
 seven-joint position and sends that exact value back as the position target;
 it does not add an offset.
 
+After that test passes, `python scripts/test_gripper_cycle.py --execute` moves
+only the gripper by 5 mm and returns it. The six arm joints stay idle.
+
+The first coordinated arm-motion diagnostic is
+`python scripts/test_whole_arm_cycle.py --execute`. It moves all six arm joints
+by a bounded 0.03 rad over three seconds, then returns them; the gripper stays
+idle.
+
 `inspect_robot.py` follows the vendor's configure/read/cleanup lifecycle. It
 does not clear controller faults, change joint modes, or send motion commands.
 `monitor_robot.py` applies the same restrictions while sampling state repeatedly.
 
 Before any future actuation, complete every item in [docs/SAFETY.md](docs/SAFETY.md).
+
+## Workspace calibration
+
+Workspace limits are calibrated from supervised, read-only boundary samples.
+Manually place the arm at a known-safe point, make sure all joints are idle,
+then capture it with `python scripts/capture_workspace_point.py --label LABEL`.
+Capture every label listed under `workspace_calibration.required_labels` in
+`configs/robot.yaml`. The capture command never changes modes or sends targets.
+
+When the arm cannot be moved manually, start active calibration with
+`python scripts/test_cartesian_step.py --axis z --distance 0.01 --execute`.
+The script performs one trajectory-checked 1 cm step, returns to its exact
+Cartesian origin, and writes a TXT report. Translation steps are hard-capped at
+1 cm; downward Z steps are capped at 5 mm.
 
 ## Data policy
 
