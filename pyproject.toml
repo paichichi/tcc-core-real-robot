@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tcc-core-real-robot"
+version = "0.1.0"
+description = "Safe real-robot evaluation workspace for TCC-Core"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "huggingface-hub>=0.28",
+  "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.9",
+]
+robot = [
+  "trossen-arm>=1.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"

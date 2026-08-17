@@ -1,0 +1,29 @@
+.DS_Store
+.env
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+*.egg-info/
+
+# Never commit private credentials or machine-specific settings.
+*.pem
+*.key
+secrets/
+configs/local/
+
+# Keep large research artifacts outside Git.
+data/
+datasets/
+checkpoints/
+runs/
+outputs/
+videos/
+*.pt
+*.pth
+*.ckpt
+*.parquet
+*.mp4

@@ -1,0 +1,22 @@
+robot:
+  model: trossen_ai_solo
+  role: follower
+  controller_ip: 192.168.1.2
+  host_ip: 192.168.1.1
+  subnet_prefix: 24
+  driver_version: TBD
+  firmware_version: TBD
+
+action_contract:
+  dimensions: 7
+  semantics: UNVERIFIED
+  enabled: false
+
+safety:
+  dry_run_by_default: true
+  require_explicit_execute_flag: true
+  require_operator_confirmation: true
+  require_emergency_stop_ready: true
+  workspace_limits: TBD
+  max_joint_delta_rad: TBD
+  max_joint_velocity_rad_s: TBD
