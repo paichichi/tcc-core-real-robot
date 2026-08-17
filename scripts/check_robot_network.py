@@ -27,8 +27,8 @@ def main() -> None:
     config = load_yaml(Path(args.config))
     assert_actuation_disabled(config)
     host = config["robot"]["controller_ip"]
-    for port in (50001, 5000):
-        print(f"{host}:{port} {probe(host, port, args.timeout)}")
+    tcp_port = 50001
+    print(f"{host}:{tcp_port} {probe(host, tcp_port, args.timeout)}")
 
 
 if __name__ == "__main__":
