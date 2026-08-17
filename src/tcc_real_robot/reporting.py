@@ -99,15 +99,18 @@ def format_current_position_hold_report(report: dict[str, Any]) -> str:
         f"Controller IP: {report['controller_ip']}",
         f"Driver version: {report['driver_version']}",
         f"Firmware version: {report['firmware_version']}",
-        f"Controller error: {report['error_information']}",
+        f"Controller error before: {report['error_information']}",
+        f"Controller error after:  {report['error_information_after']}",
         "",
         "Test configuration",
         "------------------",
         f"Goal time: {_format_value(report['goal_time_s'])} s",
         f"Observation duration: {_format_value(report['duration_s'])} s",
         f"Sample rate: {_format_value(report['sample_rate_hz'])} Hz",
-        f"Samples: {report['samples']}",
+        f"Planned samples: {report['samples']}",
+        f"Observed samples: {report['samples_observed']}",
         "The measured current position was sent back unchanged as the target.",
+        "The test returns to idle immediately if an error limit is exceeded.",
         "",
         "Mode transition",
         "---------------",
@@ -124,4 +127,13 @@ def format_current_position_hold_report(report: dict[str, Any]) -> str:
         f"Peak gripper error: {_format_value(report['peak_gripper_error_m'])} m",
         f"Allowed gripper error: {_format_value(report['max_allowed_gripper_error_m'])} m",
     ]
+    lines.extend(["", "Peak error by joint", "-------------------"])
+    for joint, error in enumerate(report["peak_joint_errors"]):
+        unit = "rad" if joint < 6 else "m"
+        lines.append(f"Joint {joint}: {_format_value(error)} {unit}")
+    lines.extend(["", "Failure reasons", "---------------"])
+    if report["failure_reasons"]:
+        lines.extend(f"- {reason}" for reason in report["failure_reasons"])
+    else:
+        lines.append("None")
     return "\n".join(lines) + "\n"

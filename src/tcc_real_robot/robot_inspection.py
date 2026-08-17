@@ -446,34 +446,35 @@ def run_current_position_hold_test(
         samples = max(1, round(duration * rate_hz))
         period = 1.0 / rate_hz
         started = time.monotonic()
-        peak_arm_error = 0.0
-        peak_gripper_error = 0.0
+        peak_joint_errors = [0.0] * 7
+        samples_observed = 0
+        failure_reasons: list[str] = []
         final = target
         for index in range(samples):
             final = [float(value) for value in driver.get_all_positions()]
             if len(final) != 7 or not all(isfinite(value) for value in final):
                 raise RuntimeError("Received invalid joint positions during hold")
-            peak_arm_error = max(
-                peak_arm_error,
-                max(
-                    abs(current - goal)
-                    for goal, current in zip(target[:6], final[:6], strict=True)
-                ),
-            )
-            peak_gripper_error = max(
-                peak_gripper_error,
-                abs(final[6] - target[6]),
-            )
+            samples_observed += 1
+            for joint, (goal, current) in enumerate(
+                zip(target, final, strict=True)
+            ):
+                peak_joint_errors[joint] = max(
+                    peak_joint_errors[joint], abs(current - goal)
+                )
+            peak_arm_error = max(peak_joint_errors[:6])
+            peak_gripper_error = peak_joint_errors[6]
             if peak_arm_error > max_arm_error:
-                raise RuntimeError(
+                failure_reasons.append(
                     f"Arm error {peak_arm_error:.6f} rad exceeded "
                     f"{max_arm_error:.6f} rad"
                 )
             if peak_gripper_error > max_gripper_error:
-                raise RuntimeError(
+                failure_reasons.append(
                     f"Gripper error {peak_gripper_error:.6f} m exceeded "
                     f"{max_gripper_error:.6f} m"
                 )
+            if failure_reasons:
+                break
             deadline = started + (index + 1) * period
             remaining = deadline - time.monotonic()
             if remaining > 0 and index + 1 < samples:
@@ -484,19 +485,30 @@ def run_current_position_hold_test(
         modes_after = [
             getattr(mode, "value", str(mode)) for mode in driver.get_modes()
         ]
-        passed = len(modes_after) == 7 and all(
+        idle_restored = len(modes_after) == 7 and all(
             mode in (0, "idle") for mode in modes_after
         )
+        if not idle_restored:
+            failure_reasons.append(f"Idle mode was not restored: {modes_after}")
+        error_information_after = str(driver.get_error_information())
+        if error_information_after != "No error":
+            failure_reasons.append(
+                f"Controller reported an error after the test: "
+                f"{error_information_after}"
+            )
         return {
-            "passed": passed,
+            "passed": not failure_reasons,
+            "failure_reasons": failure_reasons,
             "controller_ip": robot["controller_ip"],
             "driver_version": driver_version,
             "firmware_version": firmware_version,
             "error_information": error_information,
+            "error_information_after": error_information_after,
             "goal_time_s": goal_time,
             "duration_s": duration,
             "sample_rate_hz": rate_hz,
             "samples": samples,
+            "samples_observed": samples_observed,
             "modes_before": modes_before,
             "modes_during": modes_during,
             "modes_after": modes_after,
@@ -504,6 +516,7 @@ def run_current_position_hold_test(
             "final_positions": final,
             "peak_arm_error_rad": peak_arm_error,
             "peak_gripper_error_m": peak_gripper_error,
+            "peak_joint_errors": peak_joint_errors,
             "max_allowed_arm_error_rad": max_arm_error,
             "max_allowed_gripper_error_m": max_gripper_error,
         }

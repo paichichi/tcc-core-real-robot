@@ -230,6 +230,9 @@ def test_current_position_hold_commands_unchanged_target_and_cleans_up() -> None
     assert report["target_positions"] == target
     assert report["peak_arm_error_rad"] == 0.0
     assert report["peak_gripper_error_m"] == 0.0
+    assert report["peak_joint_errors"] == [0.0] * 7
+    assert report["samples_observed"] == 1
+    assert report["failure_reasons"] == []
     assert driver.cleaned_up is True
 
 
@@ -247,6 +250,31 @@ def test_current_position_hold_returns_to_idle_when_command_fails() -> None:
     with pytest.raises(RuntimeError, match="command failed"):
         run_current_position_hold_test(make_api(driver), make_config(), timeout=3.0)
 
+    assert driver.mode_calls == ["position", "idle"]
+    assert driver.cleaned_up is True
+
+
+def test_current_position_hold_stops_and_reports_excessive_error() -> None:
+    driver = FakeDriver()
+    driver.get_error_information = lambda: "No error"  # type: ignore[method-assign]
+    positions = iter(
+        [
+            [0.0] * 6 + [0.02],
+            [0.03] + [0.0] * 5 + [0.02],
+        ]
+    )
+    driver.get_all_positions = lambda: next(positions)  # type: ignore[method-assign]
+
+    report = run_current_position_hold_test(
+        make_api(driver), make_config(), timeout=3.0
+    )
+
+    assert report["passed"] is False
+    assert report["samples_observed"] == 1
+    assert report["peak_joint_errors"][0] == 0.03
+    assert report["failure_reasons"] == [
+        "Arm error 0.030000 rad exceeded 0.020000 rad"
+    ]
     assert driver.mode_calls == ["position", "idle"]
     assert driver.cleaned_up is True
 
@@ -276,3 +304,4 @@ def test_text_reports_include_operator_summary() -> None:
     current_text = format_current_position_hold_report(current)
     assert "Overall: PASS" in current_text
     assert "sent back unchanged as the target" in current_text
+    assert "Failure reasons\n---------------\nNone" in current_text
