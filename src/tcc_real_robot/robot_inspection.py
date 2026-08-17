@@ -981,7 +981,8 @@ def run_folded_pose_return(
         if max(start_errors) > start_tolerance:
             raise RuntimeError(
                 f"Arm is not at {robot['home_name']}; maximum start error "
-                f"{max(start_errors):.6f} rad exceeds {start_tolerance:.6f} rad"
+                f"{max(start_errors):.6f} rad exceeds {start_tolerance:.6f} rad; "
+                f"current positions: {initial}; per-joint errors: {start_errors}"
             )
         for joint, (position, limit) in enumerate(
             zip(target, limits[:6], strict=True)

@@ -110,5 +110,8 @@ the arm still matches `dataset_collection_home`, moves the six arm joints over
 ## Data policy
 
 Datasets, videos, checkpoints, run directories, credentials, and local hardware
-settings are excluded from Git. Record the Hugging Face dataset revision in
-`configs/experiment.yaml` so each experiment remains reproducible.
+settings are excluded from Git. Human-readable diagnostic reports under
+`outputs/` are versioned and checked by `scripts/check_output_reports.py`; every
+TXT report must contain an `Overall: PASS/FAIL` or `Decision:` verdict. Record
+the Hugging Face dataset revision in `configs/experiment.yaml` so each
+experiment remains reproducible.

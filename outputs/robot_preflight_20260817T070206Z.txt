@@ -1,0 +1,50 @@
+TCC-Core Robot Preflight Report
+================================
+Overall: PASS
+Captured at: 2026-08-17T07:02:06.994346+00:00
+Controller IP: 192.168.1.4
+Driver version: 1.9.3
+Firmware version: 1.9.2
+Controller error: No error
+
+Checks
+------
+[PASS] joint_count_is_7
+[PASS] all_modes_idle
+[PASS] positions_finite
+[PASS] temperatures_finite
+[PASS] cartesian_position_finite
+[PASS] limits_finite_and_ordered
+[PASS] positions_within_limits_and_tolerance
+
+Joint state and limits
+----------------------
+joint | position | min | max | tolerance | velocity_max | effort_max
+    0 |   0.023842 | -3.141593 |  3.141593 |  0.200000 |     6.283185 |  27.000000
+    1 |  -0.015450 |  0.000000 |  3.141593 |  0.200000 |     6.283185 |  27.000000
+    2 |  -0.002098 |  0.000000 |  2.356194 |  0.200000 |     6.283185 |  27.000000
+    3 |  -0.007439 | -1.570796 |  1.570796 |  0.400000 |     9.424778 |   7.000000
+    4 |  -0.007439 | -1.570796 |  1.570796 |  0.400000 |     9.424778 |   7.000000
+    5 |   0.080301 | -3.141593 |  3.141593 |  0.400000 |     9.424778 |   7.000000
+    6 |  -0.000880 |  0.000000 |  0.040000 |  0.004000 |     0.250000 | 100.000000
+
+Modes: [0, 0, 0, 0, 0, 0, 0]
+
+Temperatures (C)
+----------------
+Rotor:  [22.0, 22.0, 23.0, 23.0, 24.0, 24.0, 23.0]
+Driver: [23.0, 24.0, 24.0, 25.0, 27.0, 26.0, 26.0]
+
+Cartesian position
+------------------
+[0.252856353, 0.007406441, 0.164181643, 0.080342313, -0.004653799, 0.031501508]
+
+Review summary
+--------------
+- Controller reported no error.
+- Driver and firmware major/minor versions match (1.9).
+- All seven joints were idle.
+- All finite-value and controller-limit checks passed.
+- Rotor temperatures were 22-24 C; driver temperatures were 23-27 C.
+- Joint 1, joint 2, and the gripper were slightly below nominal zero but remained
+  inside their controller-provided position tolerances.

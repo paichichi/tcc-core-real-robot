@@ -205,7 +205,7 @@ def make_config() -> dict[str, object]:
             },
             "folded_pose_return": {
                 "goal_time_s": 0.001,
-                "expected_start_tolerance_rad": 0.03,
+                "expected_start_tolerance_rad": 0.08,
                 "max_tracking_error_rad": 0.03,
             },
             "cartesian_step": {
@@ -445,7 +445,7 @@ def test_cartesian_step_moves_positive_z_and_returns() -> None:
 
 def test_folded_pose_return_requires_home_and_moves_only_the_arm() -> None:
     driver = FakeDriver()
-    driver.arm_positions = [0.1] * 6
+    driver.arm_positions = [0.158] * 6
     driver.get_error_information = lambda: "No error"  # type: ignore[method-assign]
 
     report = run_folded_pose_return(make_api(driver), make_config(), timeout=3.0)
@@ -454,6 +454,7 @@ def test_folded_pose_return_requires_home_and_moves_only_the_arm() -> None:
     assert driver.arm_mode_calls == ["position", "idle"]
     assert driver.gripper_mode_calls == []
     assert driver.arm_position_calls == [([0.0] * 6, 0.001, True)]
+    assert report["start_errors_rad"] == pytest.approx([0.058] * 6)
     assert report["tracking_errors_rad"] == [0.0] * 6
     assert driver.cleaned_up is True
 

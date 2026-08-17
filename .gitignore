@@ -20,7 +20,6 @@ data/
 datasets/
 checkpoints/
 runs/
-outputs/
 videos/
 *.pt
 *.pth
