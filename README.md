@@ -101,6 +101,12 @@ origin, and writes a TXT report. Translation steps are hard-capped at 1 cm;
 downward Z steps are capped at 5 mm. `--execute` is the only execution gate;
 the script does not prompt for an additional typed confirmation.
 
+After this calibration step, return from the configured dataset home to the
+recorded folded pose with
+`python scripts/return_to_folded_pose.py --execute`. The command only runs when
+the arm still matches `dataset_collection_home`, moves the six arm joints over
+10 seconds, leaves the gripper idle, and restores all joints to idle afterward.
+
 ## Data policy
 
 Datasets, videos, checkpoints, run directories, credentials, and local hardware

@@ -5,6 +5,7 @@ import pytest
 from tcc_real_robot.reporting import (
     format_cartesian_step_report,
     format_current_position_hold_report,
+    format_folded_pose_return_report,
     format_gripper_cycle_report,
     format_position_hold_report,
     format_preflight_report,
@@ -17,6 +18,7 @@ from tcc_real_robot.robot_inspection import (
     preflight_robot,
     run_cartesian_step_test,
     run_current_position_hold_test,
+    run_folded_pose_return,
     run_gripper_cycle_test,
     run_position_hold_test,
     run_whole_arm_cycle_test,
@@ -168,6 +170,9 @@ def make_config() -> dict[str, object]:
             "home_name": "dataset_collection_home",
             "home_source": "test_fixture",
             "home_arm_positions_rad": [0.1] * 6,
+            "folded_pose_name": "test_folded_pose",
+            "folded_pose_source": "test_fixture",
+            "folded_arm_positions_rad": [0.0] * 6,
         },
         "diagnostic_tests": {
             "position_hold": {
@@ -197,6 +202,11 @@ def make_config() -> dict[str, object]:
                 "sample_rate_hz": 1000.0,
                 "max_tracking_error_rad": 0.02,
                 "joint_limit_margin_rad": 0.01,
+            },
+            "folded_pose_return": {
+                "goal_time_s": 0.001,
+                "expected_start_tolerance_rad": 0.03,
+                "max_tracking_error_rad": 0.03,
             },
             "cartesian_step": {
                 "home_goal_time_s": 0.001,
@@ -433,6 +443,32 @@ def test_cartesian_step_moves_positive_z_and_returns() -> None:
     assert driver.cleaned_up is True
 
 
+def test_folded_pose_return_requires_home_and_moves_only_the_arm() -> None:
+    driver = FakeDriver()
+    driver.arm_positions = [0.1] * 6
+    driver.get_error_information = lambda: "No error"  # type: ignore[method-assign]
+
+    report = run_folded_pose_return(make_api(driver), make_config(), timeout=3.0)
+
+    assert report["passed"] is True
+    assert driver.arm_mode_calls == ["position", "idle"]
+    assert driver.gripper_mode_calls == []
+    assert driver.arm_position_calls == [([0.0] * 6, 0.001, True)]
+    assert report["tracking_errors_rad"] == [0.0] * 6
+    assert driver.cleaned_up is True
+
+
+def test_folded_pose_return_refuses_to_move_when_not_at_home() -> None:
+    driver = FakeDriver()
+    driver.get_error_information = lambda: "No error"  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="not at dataset_collection_home"):
+        run_folded_pose_return(make_api(driver), make_config(), timeout=3.0)
+
+    assert driver.arm_position_calls == []
+    assert driver.cleaned_up is True
+
+
 def test_cartesian_step_rejects_excessive_downward_motion() -> None:
     driver = FakeDriver()
 
@@ -519,6 +555,15 @@ def test_text_reports_include_operator_summary() -> None:
     )
     cartesian["captured_at"] = "2026-08-17T07:00:00+00:00"
     assert "Overall: PASS" in format_cartesian_step_report(cartesian)
+
+    folded_driver = FakeDriver()
+    folded_driver.arm_positions = [0.1] * 6
+    folded_driver.get_error_information = lambda: "No error"  # type: ignore[method-assign]
+    folded = run_folded_pose_return(
+        make_api(folded_driver), make_config(), timeout=3.0
+    )
+    folded["captured_at"] = "2026-08-17T07:00:00+00:00"
+    assert "Overall: PASS" in format_folded_pose_return_report(folded)
 
     workspace = preflight_robot(make_api(FakeDriver()), make_config(), timeout=3.0)
     workspace["label"] = "task_center"

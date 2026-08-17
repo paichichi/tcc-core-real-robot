@@ -283,6 +283,57 @@ def format_workspace_point_report(report: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def format_folded_pose_return_report(report: dict[str, Any]) -> str:
+    """Format a one-way return from dataset home to the folded pose."""
+    lines = [
+        "TCC-Core Folded-Pose Return Report",
+        "=" * 34,
+        f"Overall: {'PASS' if report['passed'] else 'FAIL'}",
+        f"Captured at: {report['captured_at']}",
+        f"Controller IP: {report['controller_ip']}",
+        f"Driver version: {report['driver_version']}",
+        f"Firmware version: {report['firmware_version']}",
+        f"Controller error before: {report['error_before']}",
+        f"Controller error after move: {report['error_after_move']}",
+        f"Controller error after: {report['error_after']}",
+        "",
+        "Test configuration",
+        "------------------",
+        f"Required start: {report['expected_start_name']}",
+        f"Required start positions: {report['expected_start_rad']} rad",
+        f"Initial positions: {report['initial_positions_rad']} rad",
+        f"Start absolute errors: {report['start_errors_rad']} rad",
+        f"Target: {report['target_name']}",
+        f"Target source: {report['target_source']}",
+        f"Target positions: {report['target_positions_rad']} rad",
+        f"Move time: {_format_value(report['goal_time_s'])} s",
+        (
+            "Maximum tracking error: "
+            f"{_format_value(report['max_tracking_error_rad'])} rad"
+        ),
+        "The six arm joints moved in joint space; the gripper stayed idle.",
+        "",
+        "Mode transition",
+        "---------------",
+        f"Before: {report['modes_before']}",
+        f"During: {report['modes_during']}",
+        f"After:  {report['modes_after']}",
+        "",
+        "Result",
+        "------",
+        f"Observed positions: {report['observed_positions_rad']} rad",
+        f"Tracking errors: {report['tracking_errors_rad']} rad",
+        "",
+        "Failure reasons",
+        "---------------",
+    ]
+    if report["failure_reasons"]:
+        lines.extend(f"- {reason}" for reason in report["failure_reasons"])
+    else:
+        lines.append("None")
+    return "\n".join(lines) + "\n"
+
+
 def format_cartesian_step_report(report: dict[str, Any]) -> str:
     """Format one bounded Cartesian step-and-return diagnostic."""
     lines = [

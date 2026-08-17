@@ -17,6 +17,15 @@ robot:
     - 0.6292439103126526
     - -0.000572213320992887
     - 0.00019073777366429567
+  folded_pose_name: pre_dataset_home_folded_pose
+  folded_pose_source: cartesian_step_z_positive_20260817T080707Z_initial_state
+  folded_arm_positions_rad:
+    - 0.02193484455347061
+    - 0.0
+    - 0.0
+    - -0.018120087683200836
+    - -0.0078202486038208
+    - 0.07953765243291855
 
 action_contract:
   dimensions: 7
@@ -76,6 +85,10 @@ diagnostic_tests:
     sample_rate_hz: 20.0
     max_tracking_error_rad: 0.02
     joint_limit_margin_rad: 0.01
+  folded_pose_return:
+    goal_time_s: 10.0
+    expected_start_tolerance_rad: 0.03
+    max_tracking_error_rad: 0.03
   cartesian_step:
     home_goal_time_s: 10.0
     max_home_tracking_error_rad: 0.03

@@ -919,6 +919,163 @@ def run_whole_arm_cycle_test(
                 driver.cleanup(False)
 
 
+def run_folded_pose_return(
+    driver_api: Any,
+    config: dict[str, Any],
+    timeout: float,
+) -> dict[str, Any]:
+    """Return from the configured dataset home to the recorded folded pose."""
+    robot = config["robot"]
+    settings = config["diagnostic_tests"]["folded_pose_return"]
+    expected_start = [float(value) for value in robot["home_arm_positions_rad"]]
+    target = [float(value) for value in robot["folded_arm_positions_rad"]]
+    goal_time = float(settings["goal_time_s"])
+    start_tolerance = float(settings["expected_start_tolerance_rad"])
+    max_tracking_error = float(settings["max_tracking_error_rad"])
+    if len(expected_start) != 6 or not all(
+        isfinite(value) for value in expected_start
+    ):
+        raise ValueError("Expected start pose must contain six finite positions")
+    if len(target) != 6 or not all(isfinite(value) for value in target):
+        raise ValueError("Folded target must contain six finite positions")
+    if min(goal_time, start_tolerance, max_tracking_error) <= 0:
+        raise ValueError("Folded-pose return settings must be positive")
+
+    model = getattr(driver_api.Model, robot["driver_model"])
+    end_effector = getattr(driver_api.StandardEndEffector, robot["end_effector"])
+    driver = driver_api.TrossenArmDriver()
+    configured = False
+    arm_position_mode_requested = False
+
+    try:
+        driver.configure(
+            model,
+            end_effector,
+            robot["controller_ip"],
+            False,
+            timeout,
+        )
+        configured = True
+        driver_version, firmware_version = _validate_versions(driver, robot)
+        error_before = str(driver.get_error_information())
+        modes_before = [
+            getattr(mode, "value", str(mode)) for mode in driver.get_modes()
+        ]
+        if error_before != "No error":
+            raise RuntimeError(f"Controller reports an error: {error_before}")
+        if len(modes_before) != 7 or not all(
+            mode in (0, "idle") for mode in modes_before
+        ):
+            raise RuntimeError(f"All joints must start idle; got {modes_before}")
+
+        initial = [float(value) for value in driver.get_arm_positions()]
+        limits = driver.get_joint_limits()
+        if len(initial) != 6 or not all(isfinite(value) for value in initial):
+            raise RuntimeError("Expected six finite initial arm positions")
+        if len(limits) != 7:
+            raise RuntimeError("Expected seven controller joint limits")
+        start_errors = [
+            abs(observed - expected)
+            for expected, observed in zip(expected_start, initial, strict=True)
+        ]
+        if max(start_errors) > start_tolerance:
+            raise RuntimeError(
+                f"Arm is not at {robot['home_name']}; maximum start error "
+                f"{max(start_errors):.6f} rad exceeds {start_tolerance:.6f} rad"
+            )
+        for joint, (position, limit) in enumerate(
+            zip(target, limits[:6], strict=True)
+        ):
+            position_min = float(limit.position_min)
+            position_max = float(limit.position_max)
+            if not position_min <= position <= position_max:
+                raise RuntimeError(
+                    f"Folded target for joint {joint} is outside controller limits"
+                )
+
+        driver.set_arm_modes(driver_api.Mode.position)
+        arm_position_mode_requested = True
+        modes_during = [
+            getattr(mode, "value", str(mode)) for mode in driver.get_modes()
+        ]
+        position_value = getattr(driver_api.Mode.position, "value", 1)
+        if len(modes_during) != 7 or not (
+            all(mode == position_value for mode in modes_during[:6])
+            and modes_during[6] in (0, "idle")
+        ):
+            raise RuntimeError(
+                f"Expected arm position mode and gripper idle; got {modes_during}"
+            )
+
+        driver.set_arm_positions(target, goal_time, True)
+        observed = [float(value) for value in driver.get_arm_positions()]
+        if len(observed) != 6 or not all(isfinite(value) for value in observed):
+            raise RuntimeError("Received invalid folded-pose joint positions")
+        tracking_errors = [
+            abs(actual - desired)
+            for desired, actual in zip(target, observed, strict=True)
+        ]
+        failure_reasons: list[str] = []
+        if max(tracking_errors) > max_tracking_error:
+            failure_reasons.append(
+                f"Folded-pose tracking error {max(tracking_errors):.6f} rad "
+                f"exceeded {max_tracking_error:.6f} rad"
+            )
+        error_after_move = str(driver.get_error_information())
+        if error_after_move != "No error":
+            failure_reasons.append(
+                f"Controller error after folded-pose move: {error_after_move}"
+            )
+
+        driver.set_arm_modes(driver_api.Mode.idle)
+        arm_position_mode_requested = False
+        modes_after = [
+            getattr(mode, "value", str(mode)) for mode in driver.get_modes()
+        ]
+        if len(modes_after) != 7 or not all(
+            mode in (0, "idle") for mode in modes_after
+        ):
+            failure_reasons.append(f"Idle mode was not restored: {modes_after}")
+        error_after = str(driver.get_error_information())
+        if error_after != "No error":
+            failure_reasons.append(
+                f"Controller reported an error after the test: {error_after}"
+            )
+
+        return {
+            "passed": not failure_reasons,
+            "failure_reasons": failure_reasons,
+            "controller_ip": robot["controller_ip"],
+            "driver_version": driver_version,
+            "firmware_version": firmware_version,
+            "error_before": error_before,
+            "error_after_move": error_after_move,
+            "error_after": error_after,
+            "expected_start_name": robot["home_name"],
+            "expected_start_rad": expected_start,
+            "expected_start_tolerance_rad": start_tolerance,
+            "initial_positions_rad": initial,
+            "start_errors_rad": start_errors,
+            "target_name": robot["folded_pose_name"],
+            "target_source": robot["folded_pose_source"],
+            "target_positions_rad": target,
+            "goal_time_s": goal_time,
+            "max_tracking_error_rad": max_tracking_error,
+            "observed_positions_rad": observed,
+            "tracking_errors_rad": tracking_errors,
+            "modes_before": modes_before,
+            "modes_during": modes_during,
+            "modes_after": modes_after,
+        }
+    finally:
+        if configured:
+            try:
+                if arm_position_mode_requested:
+                    driver.set_arm_modes(driver_api.Mode.idle)
+            finally:
+                driver.cleanup(False)
+
+
 def run_cartesian_step_test(
     driver_api: Any,
     config: dict[str, Any],
