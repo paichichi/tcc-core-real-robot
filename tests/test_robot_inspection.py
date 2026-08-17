@@ -39,9 +39,7 @@ class FakeDriver:
 def make_api(driver: FakeDriver) -> SimpleNamespace:
     return SimpleNamespace(
         Model=SimpleNamespace(wxai_v0="model"),
-        StandardEndEffector=SimpleNamespace(
-            wxai_v0_follower_20250509="end-effector"
-        ),
+        StandardEndEffector=SimpleNamespace(wxai_v0_follower="end-effector"),
         TrossenArmDriver=lambda: driver,
     )
 
@@ -50,7 +48,7 @@ def make_config() -> dict[str, object]:
     return {
         "robot": {
             "driver_model": "wxai_v0",
-            "end_effector": "wxai_v0_follower_20250509",
+            "end_effector": "wxai_v0_follower",
             "controller_ip": "192.168.1.2",
             "expected_driver_series": "1.9",
             "expected_firmware_series": "1.9",

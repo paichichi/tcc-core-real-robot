@@ -2,7 +2,7 @@ robot:
   model: trossen_ai_solo
   role: follower
   driver_model: wxai_v0
-  end_effector: wxai_v0_follower_20250509
+  end_effector: wxai_v0_follower
   controller_ip: 192.168.1.4
   host_ip: 192.168.1.10
   subnet_prefix: 24
