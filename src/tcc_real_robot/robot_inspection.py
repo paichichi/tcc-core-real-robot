@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from math import isfinite
 from typing import Any
 
 
@@ -134,11 +135,103 @@ def monitor_robot(
             "firmware_version": firmware_version,
             "samples": sample_count,
             "elapsed_s": elapsed,
-            "observed_rate_hz": sample_count / elapsed if elapsed > 0 else 0.0,
+            "observed_rate_hz": (
+                (sample_count - 1) / elapsed if sample_count > 1 and elapsed > 0 else 0.0
+            ),
             "max_arm_change_rad": max(
                 abs(end - start) for start, end in zip(first_arm, last_arm, strict=True)
             ),
             "gripper_change_m": last_gripper - first_gripper,
+        }
+    finally:
+        if configured:
+            driver.cleanup(False)
+
+
+def preflight_robot(
+    driver_api: Any, config: dict[str, Any], timeout: float
+) -> dict[str, Any]:
+    """Collect and validate a read-only safety baseline from the controller."""
+    robot = config["robot"]
+    model = getattr(driver_api.Model, robot["driver_model"])
+    end_effector = getattr(driver_api.StandardEndEffector, robot["end_effector"])
+    driver = driver_api.TrossenArmDriver()
+    configured = False
+
+    try:
+        driver.configure(
+            model,
+            end_effector,
+            robot["controller_ip"],
+            False,
+            timeout,
+        )
+        configured = True
+        driver_version, firmware_version = _validate_versions(driver, robot)
+
+        modes = [getattr(mode, "value", str(mode)) for mode in driver.get_modes()]
+        positions = [float(value) for value in driver.get_all_positions()]
+        rotor_temperatures = [
+            float(value) for value in driver.get_all_rotor_temperatures()
+        ]
+        driver_temperatures = [
+            float(value) for value in driver.get_all_driver_temperatures()
+        ]
+        cartesian_positions = [
+            float(value) for value in driver.get_cartesian_positions()
+        ]
+        limits = []
+        for index, limit in enumerate(driver.get_joint_limits()):
+            limits.append(
+                {
+                    "joint": index,
+                    "position_min": float(limit.position_min),
+                    "position_max": float(limit.position_max),
+                    "position_tolerance": float(limit.position_tolerance),
+                    "velocity_max": float(limit.velocity_max),
+                    "velocity_tolerance": float(limit.velocity_tolerance),
+                    "effort_max": float(limit.effort_max),
+                    "effort_tolerance": float(limit.effort_tolerance),
+                }
+            )
+
+        checks: dict[str, bool] = {
+            "joint_count_is_7": len(positions) == 7 and len(limits) == 7,
+            "all_modes_idle": len(modes) == 7
+            and all(mode in (0, "idle") for mode in modes),
+            "positions_finite": all(isfinite(value) for value in positions),
+            "temperatures_finite": all(
+                isfinite(value) for value in rotor_temperatures + driver_temperatures
+            ),
+            "cartesian_position_finite": all(
+                isfinite(value) for value in cartesian_positions
+            ),
+            "limits_finite_and_ordered": all(
+                isfinite(limit["position_min"])
+                and isfinite(limit["position_max"])
+                and limit["position_min"] <= limit["position_max"]
+                for limit in limits
+            ),
+            "positions_within_limits": len(positions) == len(limits)
+            and all(
+                limit["position_min"] <= position <= limit["position_max"]
+                for position, limit in zip(positions, limits, strict=True)
+            ),
+        }
+
+        return {
+            "passed": all(checks.values()),
+            "checks": checks,
+            "controller_ip": robot["controller_ip"],
+            "driver_version": driver_version,
+            "firmware_version": firmware_version,
+            "error_information": str(driver.get_error_information()),
+            "modes": modes,
+            "positions": positions,
+            "joint_limits": limits,
+            "rotor_temperatures": rotor_temperatures,
+            "driver_temperatures": driver_temperatures,
+            "cartesian_positions": cartesian_positions,
         }
     finally:
         if configured:

@@ -57,6 +57,7 @@ python scripts/audit_dataset.py --metadata-only
 python scripts/check_robot_network.py
 python scripts/inspect_robot.py
 python scripts/monitor_robot.py --duration 5 --rate 20
+python scripts/robot_preflight.py
 pytest
 ```
 

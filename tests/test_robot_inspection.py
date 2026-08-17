@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from tcc_real_robot.robot_inspection import inspect_robot, monitor_robot
+from tcc_real_robot.robot_inspection import inspect_robot, monitor_robot, preflight_robot
 
 
 class FakeDriver:
@@ -30,6 +30,35 @@ class FakeDriver:
 
     def get_gripper_position(self) -> float:
         return 0.02
+
+    def get_all_positions(self) -> list[float]:
+        return [0.0] * 6 + [0.02]
+
+    def get_all_rotor_temperatures(self) -> list[float]:
+        return [30.0] * 7
+
+    def get_all_driver_temperatures(self) -> list[float]:
+        return [31.0] * 7
+
+    def get_cartesian_positions(self) -> list[float]:
+        return [0.3, 0.0, 0.2, 0.0, 0.0, 0.0]
+
+    def get_joint_limits(self) -> list[SimpleNamespace]:
+        return [
+            SimpleNamespace(
+                position_min=-3.0,
+                position_max=3.0,
+                position_tolerance=0.01,
+                velocity_max=1.0,
+                velocity_tolerance=0.1,
+                effort_max=10.0,
+                effort_tolerance=1.0,
+            )
+            for _ in range(7)
+        ]
+
+    def get_error_information(self) -> str:
+        return "none"
 
     def cleanup(self, reboot_controller: bool) -> None:
         assert reboot_controller is False
@@ -97,5 +126,28 @@ def test_monitor_reads_only_and_cleans_up() -> None:
 
     assert len(samples) == 1
     assert summary["samples"] == 1
+    assert summary["observed_rate_hz"] == 0.0
     assert summary["max_arm_change_rad"] == 0.0
+    assert driver.cleaned_up is True
+
+
+def test_preflight_passes_valid_idle_state_and_cleans_up() -> None:
+    driver = FakeDriver()
+
+    report = preflight_robot(make_api(driver), make_config(), timeout=3.0)
+
+    assert report["passed"] is True
+    assert all(report["checks"].values())
+    assert report["positions"][-1] == 0.02
+    assert driver.cleaned_up is True
+
+
+def test_preflight_rejects_position_outside_limits() -> None:
+    driver = FakeDriver()
+    driver.get_all_positions = lambda: [4.0] + [0.0] * 6  # type: ignore[method-assign]
+
+    report = preflight_robot(make_api(driver), make_config(), timeout=3.0)
+
+    assert report["passed"] is False
+    assert report["checks"]["positions_within_limits"] is False
     assert driver.cleaned_up is True
