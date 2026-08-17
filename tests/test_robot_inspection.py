@@ -142,6 +142,17 @@ def test_preflight_passes_valid_idle_state_and_cleans_up() -> None:
     assert driver.cleaned_up is True
 
 
+def test_preflight_accepts_position_inside_controller_tolerance() -> None:
+    driver = FakeDriver()
+    driver.get_all_positions = lambda: [-3.005] + [0.0] * 6  # type: ignore[method-assign]
+
+    report = preflight_robot(make_api(driver), make_config(), timeout=3.0)
+
+    assert report["passed"] is True
+    assert report["checks"]["positions_within_limits_and_tolerance"] is True
+    assert driver.cleaned_up is True
+
+
 def test_preflight_rejects_position_outside_limits() -> None:
     driver = FakeDriver()
     driver.get_all_positions = lambda: [4.0] + [0.0] * 6  # type: ignore[method-assign]
@@ -149,5 +160,5 @@ def test_preflight_rejects_position_outside_limits() -> None:
     report = preflight_robot(make_api(driver), make_config(), timeout=3.0)
 
     assert report["passed"] is False
-    assert report["checks"]["positions_within_limits"] is False
+    assert report["checks"]["positions_within_limits_and_tolerance"] is False
     assert driver.cleaned_up is True

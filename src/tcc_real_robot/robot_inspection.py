@@ -212,9 +212,11 @@ def preflight_robot(
                 and limit["position_min"] <= limit["position_max"]
                 for limit in limits
             ),
-            "positions_within_limits": len(positions) == len(limits)
+            "positions_within_limits_and_tolerance": len(positions) == len(limits)
             and all(
-                limit["position_min"] <= position <= limit["position_max"]
+                limit["position_min"] - limit["position_tolerance"]
+                <= position
+                <= limit["position_max"] + limit["position_tolerance"]
                 for position, limit in zip(positions, limits, strict=True)
             ),
         }
