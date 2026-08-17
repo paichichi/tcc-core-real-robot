@@ -94,9 +94,12 @@ Capture every label listed under `workspace_calibration.required_labels` in
 
 When the arm cannot be moved manually, start active calibration with
 `python scripts/test_cartesian_step.py --axis z --distance 0.01 --execute`.
-The script performs one trajectory-checked 1 cm step, returns to its exact
-Cartesian origin, and writes a TXT report. Translation steps are hard-capped at
-1 cm; downward Z steps are capped at 5 mm.
+The script first takes 10 seconds to move the arm to the configured dataset
+collection home pose and verifies the observed joint positions. It then
+performs one trajectory-checked 1 cm step, returns to the home Cartesian
+origin, and writes a TXT report. Translation steps are hard-capped at 1 cm;
+downward Z steps are capped at 5 mm. `--execute` is the only execution gate;
+the script does not prompt for an additional typed confirmation.
 
 ## Data policy
 

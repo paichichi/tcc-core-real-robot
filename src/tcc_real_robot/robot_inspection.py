@@ -934,6 +934,9 @@ def run_cartesian_step_test(
 
     robot = config["robot"]
     settings = config["diagnostic_tests"]["cartesian_step"]
+    home_target = [float(value) for value in robot["home_arm_positions_rad"]]
+    home_goal_time = float(settings["home_goal_time_s"])
+    max_home_tracking_error = float(settings["max_home_tracking_error_rad"])
     goal_time = float(settings["goal_time_s"])
     hold_duration = float(settings["hold_duration_s"])
     max_step = float(settings["max_translation_step_m"])
@@ -941,6 +944,8 @@ def run_cartesian_step_test(
     max_tracking_error = float(settings["max_tracking_error_m"])
     trajectory_check_samples = int(settings["trajectory_check_samples"])
     if min(
+        home_goal_time,
+        max_home_tracking_error,
         goal_time,
         hold_duration,
         max_step,
@@ -949,6 +954,8 @@ def run_cartesian_step_test(
         trajectory_check_samples,
     ) <= 0:
         raise ValueError("Cartesian-step settings must be positive")
+    if len(home_target) != 6 or not all(isfinite(value) for value in home_target):
+        raise ValueError("Configured home must contain six finite arm positions")
     permitted_step = max_downward_step if axis == "z" and distance_m < 0 else max_step
     if abs(distance_m) > permitted_step:
         raise ValueError(
@@ -983,19 +990,56 @@ def run_cartesian_step_test(
         ):
             raise RuntimeError(f"All joints must start idle; got {modes_before}")
 
-        origin = [float(value) for value in driver.get_cartesian_positions()]
+        initial_cartesian = [
+            float(value) for value in driver.get_cartesian_positions()
+        ]
         initial_joints = [float(value) for value in driver.get_all_positions()]
-        if len(origin) != 6 or not all(isfinite(value) for value in origin):
+        if len(initial_cartesian) != 6 or not all(
+            isfinite(value) for value in initial_cartesian
+        ):
             raise RuntimeError("Expected six finite initial Cartesian positions")
         if len(initial_joints) != 7 or not all(
             isfinite(value) for value in initial_joints
         ):
             raise RuntimeError("Expected seven finite initial joint positions")
-        target = origin.copy()
-        target[{"x": 0, "y": 1, "z": 2}[axis]] += distance_m
+
+        limits = driver.get_joint_limits()
+        if len(limits) != 7 or not all(
+            float(limit.position_min) <= target <= float(limit.position_max)
+            for target, limit in zip(home_target, limits[:6], strict=True)
+        ):
+            raise RuntimeError("Configured home is outside controller joint limits")
 
         driver.set_arm_modes(driver_api.Mode.position)
         arm_position_mode_requested = True
+        driver.set_arm_positions(home_target, home_goal_time, True)
+        observed_home = [float(value) for value in driver.get_arm_positions()]
+        if len(observed_home) != 6 or not all(
+            isfinite(value) for value in observed_home
+        ):
+            raise RuntimeError("Received invalid joint positions at home")
+        home_errors = [
+            abs(observed - target)
+            for target, observed in zip(home_target, observed_home, strict=True)
+        ]
+        peak_home_error = max(home_errors)
+        if peak_home_error > max_home_tracking_error:
+            raise RuntimeError(
+                f"Home tracking error {peak_home_error:.6f} rad exceeded "
+                f"{max_home_tracking_error:.6f} rad"
+            )
+        error_after_home = str(driver.get_error_information())
+        if error_after_home != "No error":
+            raise RuntimeError(
+                f"Controller reported an error after moving home: "
+                f"{error_after_home}"
+            )
+
+        origin = [float(value) for value in driver.get_cartesian_positions()]
+        if len(origin) != 6 or not all(isfinite(value) for value in origin):
+            raise RuntimeError("Expected six finite Cartesian home positions")
+        target = origin.copy()
+        target[{"x": 0, "y": 1, "z": 2}[axis]] += distance_m
         modes_during = [
             getattr(mode, "value", str(mode)) for mode in driver.get_modes()
         ]
@@ -1095,6 +1139,14 @@ def run_cartesian_step_test(
             "error_after": error_after,
             "axis": axis,
             "distance_m": distance_m,
+            "home_name": robot["home_name"],
+            "home_source": robot["home_source"],
+            "home_goal_time_s": home_goal_time,
+            "max_home_tracking_error_rad": max_home_tracking_error,
+            "home_target_rad": home_target,
+            "observed_home_rad": observed_home,
+            "home_errors_rad": home_errors,
+            "error_after_home": error_after_home,
             "goal_time_s": goal_time,
             "hold_duration_s": hold_duration,
             "max_tracking_error_m": max_tracking_error,
@@ -1102,6 +1154,7 @@ def run_cartesian_step_test(
             "modes_before": modes_before,
             "modes_during": modes_during,
             "modes_after": modes_after,
+            "initial_cartesian": initial_cartesian,
             "origin_cartesian": origin,
             "target_cartesian": target,
             "observed_target_cartesian": observed_target,

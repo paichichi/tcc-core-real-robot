@@ -11,8 +11,6 @@ from tcc_real_robot.config import assert_actuation_disabled, load_yaml
 from tcc_real_robot.reporting import format_cartesian_step_report
 from tcc_real_robot.robot_inspection import run_cartesian_step_test
 
-CONFIRMATION = "I CONFIRM CARTESIAN STEP CLEAR"
-
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -34,17 +32,16 @@ def main() -> None:
     if not args.execute:
         raise SystemExit("Refusing to move the arm without --execute")
 
-    print(
-        f"This test moves Cartesian {args.axis} by {args.distance:+.3f} m "
-        "and returns."
-    )
-    print("Clear the full arm workspace and keep the emergency stop ready.")
-    typed = input(f"Type exactly '{CONFIRMATION}' to continue: ")
-    if typed != CONFIRMATION:
-        raise SystemExit("Confirmation did not match; no connection was attempted")
-
     config = load_yaml(Path(args.config))
     assert_actuation_disabled(config)
+    home_name = config["robot"]["home_name"]
+    print(f"This test first moves slowly to {home_name}.")
+    print(
+        f"It then moves Cartesian {args.axis} by {args.distance:+.3f} m "
+        "and returns to the home Cartesian origin."
+    )
+    print("Clear the full arm workspace and keep the emergency stop ready.")
+
     try:
         import trossen_arm
     except ImportError as exc:

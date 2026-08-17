@@ -165,6 +165,9 @@ def make_config() -> dict[str, object]:
             "controller_ip": "192.168.1.2",
             "expected_driver_series": "1.9",
             "expected_firmware_series": "1.9",
+            "home_name": "dataset_collection_home",
+            "home_source": "test_fixture",
+            "home_arm_positions_rad": [0.1] * 6,
         },
         "diagnostic_tests": {
             "position_hold": {
@@ -196,6 +199,8 @@ def make_config() -> dict[str, object]:
                 "joint_limit_margin_rad": 0.01,
             },
             "cartesian_step": {
+                "home_goal_time_s": 0.001,
+                "max_home_tracking_error_rad": 0.03,
                 "goal_time_s": 0.001,
                 "hold_duration_s": 0.001,
                 "max_translation_step_m": 0.01,
@@ -418,6 +423,7 @@ def test_cartesian_step_moves_positive_z_and_returns() -> None:
     assert report["passed"] is True
     assert driver.arm_mode_calls == ["position", "idle"]
     assert driver.gripper_mode_calls == []
+    assert driver.arm_position_calls == [([0.1] * 6, 0.001, True)]
     assert driver.cartesian_position_calls == [
         (target, "cartesian", 0.001, True, 1000),
         (origin, "cartesian", 0.001, True, 1000),
@@ -440,6 +446,25 @@ def test_cartesian_step_rejects_excessive_downward_motion() -> None:
         )
 
     assert driver.configure_args is None
+
+
+def test_cartesian_step_stops_before_cartesian_motion_when_home_is_not_reached() -> None:
+    driver = FakeDriver()
+    driver.get_error_information = lambda: "No error"  # type: ignore[method-assign]
+    driver.set_arm_positions = lambda *args: None  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="Home tracking error"):
+        run_cartesian_step_test(
+            make_api(driver),
+            make_config(),
+            timeout=3.0,
+            axis="z",
+            distance_m=0.01,
+        )
+
+    assert driver.cartesian_position_calls == []
+    assert driver.arm_mode_calls == ["position", "idle"]
+    assert driver.cleaned_up is True
 
 
 def test_text_reports_include_operator_summary() -> None:
