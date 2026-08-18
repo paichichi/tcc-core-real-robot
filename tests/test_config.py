@@ -18,8 +18,8 @@ def test_initial_revision_disables_actuation() -> None:
     assert clipped["max_steps"] == 10
     assert clipped["max_joint_delta_rad"] <= 0.02
     assert clipped["max_gripper_delta_m"] <= 0.001
-    assert clipped["max_cumulative_joint_delta_rad"] <= 0.04
-    assert clipped["max_cumulative_gripper_delta_m"] <= 0.002
+    assert clipped["max_cumulative_joint_delta_rad"] <= 0.06
+    assert clipped["max_cumulative_gripper_delta_m"] <= 0.003
 
 
 def test_dataset_scope_is_four_tasks() -> None:

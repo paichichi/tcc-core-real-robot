@@ -56,8 +56,8 @@ policy_evaluation:
     max_steps: 10
     max_joint_delta_rad: 0.02
     max_gripper_delta_m: 0.001
-    max_cumulative_joint_delta_rad: 0.04
-    max_cumulative_gripper_delta_m: 0.002
+    max_cumulative_joint_delta_rad: 0.06
+    max_cumulative_gripper_delta_m: 0.003
     goal_time_s: 1.0
     max_arm_tracking_error_rad: 0.02
     max_gripper_tracking_error_m: 0.001

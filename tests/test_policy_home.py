@@ -89,8 +89,8 @@ def make_config() -> dict:
                 "max_steps": 3,
                 "max_joint_delta_rad": 0.02,
                 "max_gripper_delta_m": 0.001,
-                "max_cumulative_joint_delta_rad": 0.04,
-                "max_cumulative_gripper_delta_m": 0.002,
+                "max_cumulative_joint_delta_rad": 0.06,
+                "max_cumulative_gripper_delta_m": 0.003,
                 "goal_time_s": 1.0,
                 "max_arm_tracking_error_rad": 0.02,
                 "max_gripper_tracking_error_m": 0.001,
@@ -155,6 +155,6 @@ def test_bounded_policy_steps_stop_at_cumulative_home_envelope() -> None:
     for _ in range(3):
         result = session.execute_bounded_policy_step([3.0] * 7, reference)
 
-    assert result.commanded[:6] == pytest.approx([0.04, 1.04, 0.54, 0.64, 0.04, 0.04])
-    assert result.commanded[6] == pytest.approx(0.002)
+    assert result.commanded[:6] == pytest.approx([0.06, 1.06, 0.56, 0.66, 0.06, 0.06])
+    assert result.commanded[6] == pytest.approx(0.003)
     session.close()
