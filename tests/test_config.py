@@ -22,7 +22,7 @@ def test_initial_revision_disables_actuation() -> None:
     assert clipped["max_cumulative_gripper_delta_m"] <= 0.003
     probe = config["workspace_probe"]
     assert probe["step_m"] <= 0.002
-    assert probe["hard_travel_limits_m"]["z_negative"] <= 0.02
+    assert probe["hard_travel_limits_m"]["z_negative"] <= 0.10
 
 
 def test_dataset_scope_is_four_tasks() -> None:

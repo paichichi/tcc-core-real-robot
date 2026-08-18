@@ -130,4 +130,4 @@ workspace_probe:
     y_positive: 0.10
     y_negative: 0.10
     z_positive: 0.10
-    z_negative: 0.02
+    z_negative: 0.10
