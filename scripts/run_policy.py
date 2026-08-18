@@ -69,6 +69,20 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Reserved for a future safety-gated actuation implementation.",
     )
+    parser.add_argument(
+        "--execute-clipped-step",
+        action="store_true",
+        help=(
+            "Execute exactly one policy prediction after clipping it to the "
+            "configured small joint/gripper deltas. Requires --execute-home, "
+            "--max-steps 1, and --emergency-stop-ready."
+        ),
+    )
+    parser.add_argument(
+        "--emergency-stop-ready",
+        action="store_true",
+        help="Acknowledge that the physical emergency stop is immediately ready.",
+    )
     return parser.parse_args()
 
 
@@ -274,6 +288,15 @@ def main() -> None:
     config = load_yaml(args.config)
     robot_config = load_yaml(args.robot_config)
     assert_shadow_only(robot_config, args.execute)
+    if args.execute_clipped_step:
+        if not args.execute_home:
+            raise SystemExit("--execute-clipped-step requires --execute-home")
+        if args.max_steps != 1:
+            raise SystemExit("--execute-clipped-step requires --max-steps 1")
+        if not args.emergency_stop_ready:
+            raise SystemExit(
+                "--execute-clipped-step requires --emergency-stop-ready"
+            )
 
     import cv2
 
@@ -327,11 +350,13 @@ def main() -> None:
     expected_resolution = (height, width, 3)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    output_path = args.output_dir / f"policy_shadow_{args.backbone}_{stamp}.txt"
+    output_kind = "policy_clipped_step" if args.execute_clipped_step else "policy_shadow"
+    output_path = args.output_dir / f"{output_kind}_{args.backbone}_{stamp}.txt"
     started = time.monotonic()
     rollout_started: float | None = None
     completed = 0
     decision = "FAIL"
+    exit_ok = False
     failure = ""
     latencies_ms: list[float] = []
     pair_skews_ms: list[float] = []
@@ -339,11 +364,15 @@ def main() -> None:
     home_reference: list[float] | None = None
     first_arm_delta: float | None = None
     first_gripper_delta: float | None = None
+    bounded_step: Any | None = None
 
     with output_path.open("w", encoding="utf-8", buffering=1) as report:
-        report.write("TCC Real-Robot Policy Shadow Evaluation\n")
+        report.write("TCC Real-Robot Policy Evaluation\n")
         report.write("=======================================\n")
-        report.write("Mode: SHADOW (policy predictions are never actuated)\n")
+        if args.execute_clipped_step:
+            report.write("Mode: CLIPPED SINGLE STEP (exactly one bounded command)\n")
+        else:
+            report.write("Mode: SHADOW (policy predictions are never actuated)\n")
         report.write(f"Home staging: {'ENABLED' if args.execute_home else 'NOT RUN'}\n")
         report.write(f"Task: {task_name} (index {task_index})\n")
         report.write(f"Backbone: {args.backbone}\n")
@@ -386,7 +415,11 @@ def main() -> None:
 
                 print(
                     "Moving arm and gripper to dataset_collection_home. "
-                    "Policy actions remain shadow-only."
+                    + (
+                        "One clipped policy step may follow."
+                        if args.execute_clipped_step
+                        else "Policy actions remain shadow-only."
+                    )
                 )
                 home_session = PolicyHomeSession(
                     trossen_arm, robot_config, args.controller_timeout
@@ -489,6 +522,32 @@ def main() -> None:
                             )
                         )
                         first_gripper_delta = abs(float(action[6]) - home_reference[6])
+                    if args.execute_clipped_step:
+                        if step != 0 or home_session is None:
+                            raise RuntimeError(
+                                "Clipped actuation is restricted to one prepared step"
+                            )
+                        bounded_step = home_session.execute_bounded_policy_step(
+                            [float(value) for value in action.tolist()]
+                        )
+                        commanded_values = ", ".join(
+                            f"{value:.7f}" for value in bounded_step.commanded
+                        )
+                        observed_values = ", ".join(
+                            f"{value:.7f}" for value in bounded_step.observed
+                        )
+                        report.write(
+                            f"commanded_clipped=[{commanded_values}]\n"
+                            f"observed_after_command=[{observed_values}]\n"
+                            f"commanded_max_arm_delta_rad="
+                            f"{bounded_step.max_commanded_arm_delta_rad:.7f}\n"
+                            f"commanded_gripper_delta_m="
+                            f"{bounded_step.commanded_gripper_delta_m:.7f}\n"
+                            f"arm_tracking_error_rad="
+                            f"{bounded_step.max_arm_tracking_error_rad:.7f}\n"
+                            f"gripper_tracking_error_m="
+                            f"{bounded_step.gripper_tracking_error_m:.7f}\n"
+                        )
                     values = ", ".join(f"{value:.7f}" for value in action.tolist())
                     report.write(
                         f"step={step:03d} elapsed_s={elapsed:.6f} "
@@ -543,10 +602,46 @@ def main() -> None:
                 and first_gripper_delta
                 <= float(robot_config["safety"]["max_gripper_delta_m"]),
             }
+            if args.execute_clipped_step:
+                clipped = evaluation_settings["clipped_single_step"]
+                checks.update(
+                    {
+                        "clipped_step_completed": bounded_step is not None,
+                        "commanded_arm_delta_safe": bounded_step is not None
+                        and bounded_step.max_commanded_arm_delta_rad
+                        <= float(clipped["max_joint_delta_rad"]),
+                        "commanded_gripper_delta_safe": bounded_step is not None
+                        and bounded_step.commanded_gripper_delta_m
+                        <= float(clipped["max_gripper_delta_m"]),
+                        "clipped_arm_tracking_safe": bounded_step is not None
+                        and bounded_step.max_arm_tracking_error_rad
+                        <= float(clipped["max_arm_tracking_error_rad"]),
+                        "clipped_gripper_tracking_safe": bounded_step is not None
+                        and bounded_step.gripper_tracking_error_m
+                        <= float(clipped["max_gripper_tracking_error_m"]),
+                    }
+                )
             if failure:
                 decision = "FAIL"
+            elif args.execute_clipped_step:
+                execution_checks = (
+                    "all_steps_completed",
+                    "home_staging_completed",
+                    "camera_pair_skew_safe",
+                    "clipped_step_completed",
+                    "commanded_arm_delta_safe",
+                    "commanded_gripper_delta_safe",
+                    "clipped_arm_tracking_safe",
+                    "clipped_gripper_tracking_safe",
+                )
+                if all(checks[name] for name in execution_checks):
+                    decision = "CLIPPED_STEP_COMPLETE_RAW_POLICY_BLOCKED"
+                    exit_ok = True
+                else:
+                    decision = "BLOCKED"
             elif all(checks.values()):
                 decision = "PASS"
+                exit_ok = True
             else:
                 decision = "BLOCKED"
             report.write("\nSummary\n")
@@ -571,11 +666,13 @@ def main() -> None:
                 report.write(f"- {name}: {'PASS' if passed else 'FAIL'}\n")
             if failure:
                 report.write(f"Failure: {failure}\n")
+            if args.execute_clipped_step:
+                report.write("Raw continuous policy release: BLOCKED\n")
             report.write(f"Decision: {decision}\n")
 
     print(output_path.read_text(encoding="utf-8"), end="")
     print(f"report: {output_path}")
-    if decision != "PASS":
+    if not exit_ok:
         raise SystemExit(1)
 
 

@@ -52,6 +52,12 @@ policy_evaluation:
   max_home_gripper_error_m: 0.002
   inference_warmup_steps: 3
   minimum_observed_rate_hz: 18.0
+  clipped_single_step:
+    max_joint_delta_rad: 0.02
+    max_gripper_delta_m: 0.001
+    goal_time_s: 2.0
+    max_arm_tracking_error_rad: 0.02
+    max_gripper_tracking_error_m: 0.001
 
 workspace_calibration:
   status: collecting_points

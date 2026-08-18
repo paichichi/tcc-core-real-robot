@@ -85,6 +85,13 @@ def make_config() -> dict:
             "gripper_goal_time_s": 2.0,
             "max_home_tracking_error_rad": 0.03,
             "max_home_gripper_error_m": 0.002,
+            "clipped_single_step": {
+                "max_joint_delta_rad": 0.02,
+                "max_gripper_delta_m": 0.001,
+                "goal_time_s": 2.0,
+                "max_arm_tracking_error_rad": 0.02,
+                "max_gripper_tracking_error_m": 0.001,
+            },
         },
     }
 
@@ -115,3 +122,21 @@ def test_prepare_home_rejects_non_idle_start() -> None:
         session.prepare()
 
     assert driver.cleaned is True
+
+
+def test_execute_bounded_policy_step_clips_then_tracks() -> None:
+    driver = FakeHomeDriver()
+    session = PolicyHomeSession(make_api(driver), make_config(), timeout=20.0)
+    session.prepare()
+
+    result = session.execute_bounded_policy_step(
+        [0.5, 2.0, 1.5, -1.0, 0.5, 0.5, 0.02]
+    )
+
+    assert result.commanded == pytest.approx(
+        (0.02, 1.02, 0.52, 0.58, 0.02, 0.02, 0.001)
+    )
+    assert result.max_commanded_arm_delta_rad == pytest.approx(0.02)
+    assert result.commanded_gripper_delta_m == pytest.approx(0.001)
+    assert result.observed == pytest.approx(result.commanded)
+    session.close()

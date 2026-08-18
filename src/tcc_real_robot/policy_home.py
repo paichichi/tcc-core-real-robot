@@ -26,6 +26,20 @@ class HomePreparation:
     gripper_error_m: float
 
 
+@dataclass(frozen=True)
+class BoundedPolicyStep:
+    """Measured result of one clipped absolute-policy command."""
+
+    raw_target: tuple[float, ...]
+    start: tuple[float, ...]
+    commanded: tuple[float, ...]
+    observed: tuple[float, ...]
+    max_commanded_arm_delta_rad: float
+    commanded_gripper_delta_m: float
+    max_arm_tracking_error_rad: float
+    gripper_tracking_error_m: float
+
+
 class PolicyHomeSession:
     """Keep the arm at dataset home while a shadow evaluation runs."""
 
@@ -146,6 +160,76 @@ class PolicyHomeSession:
         if len(positions) != 7 or not all(isfinite(value) for value in positions):
             raise RuntimeError("Controller returned invalid joint positions")
         return positions
+
+    def execute_bounded_policy_step(
+        self,
+        raw_target: list[float],
+    ) -> BoundedPolicyStep:
+        """Execute exactly one policy step after clipping it around current state."""
+        if self.driver is None or not self.configured:
+            raise RuntimeError("Home session is not connected")
+        if len(raw_target) != 7 or not all(isfinite(value) for value in raw_target):
+            raise ValueError("Policy target must contain seven finite values")
+
+        settings = self.config["policy_evaluation"]["clipped_single_step"]
+        max_arm_delta = float(settings["max_joint_delta_rad"])
+        max_gripper_delta = float(settings["max_gripper_delta_m"])
+        goal_time = float(settings["goal_time_s"])
+        max_arm_tracking_error = float(settings["max_arm_tracking_error_rad"])
+        max_gripper_tracking_error = float(settings["max_gripper_tracking_error_m"])
+        if max_arm_delta <= 0 or max_gripper_delta <= 0 or goal_time <= 0.2:
+            raise ValueError("Clipped single-step limits and goal time are invalid")
+
+        start = self.read_positions()
+        limits = self.driver.get_joint_limits()
+        if len(limits) != 7:
+            raise RuntimeError("Expected seven controller joint limits")
+        commanded: list[float] = []
+        for index, (current, target, limit) in enumerate(
+            zip(start, raw_target, limits, strict=True)
+        ):
+            maximum_delta = max_arm_delta if index < 6 else max_gripper_delta
+            delta = max(-maximum_delta, min(maximum_delta, target - current))
+            bounded = current + delta
+            bounded = max(float(limit.position_min), bounded)
+            bounded = min(float(limit.position_max), bounded)
+            commanded.append(bounded)
+
+        self.driver.set_arm_positions(commanded[:6], goal_time, True)
+        self.driver.set_gripper_position(commanded[6], goal_time, True)
+        observed = self.read_positions()
+        arm_tracking_error = max(
+            abs(actual - target)
+            for actual, target in zip(observed[:6], commanded[:6], strict=True)
+        )
+        gripper_tracking_error = abs(observed[6] - commanded[6])
+        if arm_tracking_error > max_arm_tracking_error:
+            raise RuntimeError(
+                f"Single-step arm tracking error {arm_tracking_error:.6f} rad "
+                "exceeds limit"
+            )
+        if gripper_tracking_error > max_gripper_tracking_error:
+            raise RuntimeError(
+                f"Single-step gripper tracking error {gripper_tracking_error:.6f} m "
+                "exceeds limit"
+            )
+        error_after = str(self.driver.get_error_information())
+        if error_after.lower() != "no error":
+            raise RuntimeError(f"Controller reports an error: {error_after}")
+
+        return BoundedPolicyStep(
+            raw_target=tuple(raw_target),
+            start=tuple(start),
+            commanded=tuple(commanded),
+            observed=tuple(observed),
+            max_commanded_arm_delta_rad=max(
+                abs(target - current)
+                for target, current in zip(commanded[:6], start[:6], strict=True)
+            ),
+            commanded_gripper_delta_m=abs(commanded[6] - start[6]),
+            max_arm_tracking_error_rad=arm_tracking_error,
+            gripper_tracking_error_m=gripper_tracking_error,
+        )
 
     def close(self) -> None:
         if self.driver is None:
