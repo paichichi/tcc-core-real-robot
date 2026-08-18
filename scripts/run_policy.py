@@ -73,9 +73,9 @@ def parse_args() -> argparse.Namespace:
         "--execute-clipped-step",
         action="store_true",
         help=(
-            "Execute exactly one policy prediction after clipping it to the "
-            "configured small joint/gripper deltas. Requires --execute-home, "
-            "--max-steps 1, and --emergency-stop-ready."
+            "Execute a short policy rollout after clipping every command to "
+            "small per-step and cumulative-from-home limits. Requires "
+            "--execute-home and --emergency-stop-ready."
         ),
     )
     parser.add_argument(
@@ -291,8 +291,13 @@ def main() -> None:
     if args.execute_clipped_step:
         if not args.execute_home:
             raise SystemExit("--execute-clipped-step requires --execute-home")
-        if args.max_steps != 1:
-            raise SystemExit("--execute-clipped-step requires --max-steps 1")
+        clipped_settings = robot_config["policy_evaluation"]["clipped_rollout"]
+        clipped_max_steps = int(clipped_settings["max_steps"])
+        if args.max_steps is None or not 1 <= args.max_steps <= clipped_max_steps:
+            raise SystemExit(
+                "--execute-clipped-step requires --max-steps within "
+                f"[1, {clipped_max_steps}]"
+            )
         if not args.emergency_stop_ready:
             raise SystemExit(
                 "--execute-clipped-step requires --emergency-stop-ready"
@@ -350,7 +355,9 @@ def main() -> None:
     expected_resolution = (height, width, 3)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    output_kind = "policy_clipped_step" if args.execute_clipped_step else "policy_shadow"
+    output_kind = (
+        "policy_clipped_rollout" if args.execute_clipped_step else "policy_shadow"
+    )
     output_path = args.output_dir / f"{output_kind}_{args.backbone}_{stamp}.txt"
     started = time.monotonic()
     rollout_started: float | None = None
@@ -364,13 +371,13 @@ def main() -> None:
     home_reference: list[float] | None = None
     first_arm_delta: float | None = None
     first_gripper_delta: float | None = None
-    bounded_step: Any | None = None
+    bounded_steps: list[Any] = []
 
     with output_path.open("w", encoding="utf-8", buffering=1) as report:
         report.write("TCC Real-Robot Policy Evaluation\n")
         report.write("=======================================\n")
         if args.execute_clipped_step:
-            report.write("Mode: CLIPPED SINGLE STEP (exactly one bounded command)\n")
+            report.write("Mode: CLIPPED ROLLOUT (bounded per-step and from home)\n")
         else:
             report.write("Mode: SHADOW (policy predictions are never actuated)\n")
         report.write(f"Home staging: {'ENABLED' if args.execute_home else 'NOT RUN'}\n")
@@ -416,7 +423,7 @@ def main() -> None:
                 print(
                     "Moving arm and gripper to dataset_collection_home. "
                     + (
-                        "One clipped policy step may follow."
+                        "A short clipped policy rollout may follow."
                         if args.execute_clipped_step
                         else "Policy actions remain shadow-only."
                     )
@@ -523,13 +530,15 @@ def main() -> None:
                         )
                         first_gripper_delta = abs(float(action[6]) - home_reference[6])
                     if args.execute_clipped_step:
-                        if step != 0 or home_session is None:
+                        if home_session is None or home_reference is None:
                             raise RuntimeError(
-                                "Clipped actuation is restricted to one prepared step"
+                                "Clipped actuation requires a prepared home reference"
                             )
                         bounded_step = home_session.execute_bounded_policy_step(
-                            [float(value) for value in action.tolist()]
+                            [float(value) for value in action.tolist()],
+                            home_reference,
                         )
+                        bounded_steps.append(bounded_step)
                         commanded_values = ", ".join(
                             f"{value:.7f}" for value in bounded_step.commanded
                         )
@@ -537,15 +546,16 @@ def main() -> None:
                             f"{value:.7f}" for value in bounded_step.observed
                         )
                         report.write(
-                            f"commanded_clipped=[{commanded_values}]\n"
-                            f"observed_after_command=[{observed_values}]\n"
-                            f"commanded_max_arm_delta_rad="
+                            f"step={step:03d} commanded_clipped=[{commanded_values}]\n"
+                            f"step={step:03d} observed_after_command="
+                            f"[{observed_values}]\n"
+                            f"step={step:03d} commanded_max_arm_delta_rad="
                             f"{bounded_step.max_commanded_arm_delta_rad:.7f}\n"
-                            f"commanded_gripper_delta_m="
+                            f"step={step:03d} commanded_gripper_delta_m="
                             f"{bounded_step.commanded_gripper_delta_m:.7f}\n"
-                            f"arm_tracking_error_rad="
+                            f"step={step:03d} arm_tracking_error_rad="
                             f"{bounded_step.max_arm_tracking_error_rad:.7f}\n"
-                            f"gripper_tracking_error_m="
+                            f"step={step:03d} gripper_tracking_error_m="
                             f"{bounded_step.gripper_tracking_error_m:.7f}\n"
                         )
                     values = ", ".join(f"{value:.7f}" for value in action.tolist())
@@ -587,10 +597,20 @@ def main() -> None:
                 float(np.median(pair_skews_ms)) if pair_skews_ms else float("nan")
             )
             pair_skew_max = max(pair_skews_ms, default=float("nan"))
+            minimum_rate_hz = float(evaluation_settings["minimum_observed_rate_hz"])
+            if args.execute_clipped_step:
+                inference_rate = (
+                    1000.0 / latency_max
+                    if np.isfinite(latency_max) and latency_max > 0
+                    else 0.0
+                )
+                minimum_rate_met = inference_rate >= minimum_rate_hz
+            else:
+                inference_rate = observed_rate
+                minimum_rate_met = observed_rate >= minimum_rate_hz
             checks = {
                 "all_steps_completed": completed == max_steps,
-                "minimum_rate_met": observed_rate
-                >= float(evaluation_settings["minimum_observed_rate_hz"]),
+                "minimum_rate_met": minimum_rate_met,
                 "home_staging_completed": home_reference is not None,
                 "camera_pair_skew_safe": len(pair_skews_ms) == completed
                 and completed > 0
@@ -603,21 +623,28 @@ def main() -> None:
                 <= float(robot_config["safety"]["max_gripper_delta_m"]),
             }
             if args.execute_clipped_step:
-                clipped = evaluation_settings["clipped_single_step"]
+                clipped = evaluation_settings["clipped_rollout"]
                 checks.update(
                     {
-                        "clipped_step_completed": bounded_step is not None,
-                        "commanded_arm_delta_safe": bounded_step is not None
-                        and bounded_step.max_commanded_arm_delta_rad
-                        <= float(clipped["max_joint_delta_rad"]),
-                        "commanded_gripper_delta_safe": bounded_step is not None
-                        and bounded_step.commanded_gripper_delta_m
-                        <= float(clipped["max_gripper_delta_m"]),
-                        "clipped_arm_tracking_safe": bounded_step is not None
-                        and bounded_step.max_arm_tracking_error_rad
+                        "clipped_rollout_completed": len(bounded_steps) == completed
+                        and completed == max_steps,
+                        "commanded_arm_delta_safe": bool(bounded_steps)
+                        and max(
+                            item.max_commanded_arm_delta_rad for item in bounded_steps
+                        )
+                        <= float(clipped["max_joint_delta_rad"]) + 1e-9,
+                        "commanded_gripper_delta_safe": bool(bounded_steps)
+                        and max(item.commanded_gripper_delta_m for item in bounded_steps)
+                        <= float(clipped["max_gripper_delta_m"]) + 1e-9,
+                        "clipped_arm_tracking_safe": bool(bounded_steps)
+                        and max(
+                            item.max_arm_tracking_error_rad for item in bounded_steps
+                        )
                         <= float(clipped["max_arm_tracking_error_rad"]),
-                        "clipped_gripper_tracking_safe": bounded_step is not None
-                        and bounded_step.gripper_tracking_error_m
+                        "clipped_gripper_tracking_safe": bool(bounded_steps)
+                        and max(
+                            item.gripper_tracking_error_m for item in bounded_steps
+                        )
                         <= float(clipped["max_gripper_tracking_error_m"]),
                     }
                 )
@@ -628,14 +655,14 @@ def main() -> None:
                     "all_steps_completed",
                     "home_staging_completed",
                     "camera_pair_skew_safe",
-                    "clipped_step_completed",
+                    "clipped_rollout_completed",
                     "commanded_arm_delta_safe",
                     "commanded_gripper_delta_safe",
                     "clipped_arm_tracking_safe",
                     "clipped_gripper_tracking_safe",
                 )
                 if all(checks[name] for name in execution_checks):
-                    decision = "CLIPPED_STEP_COMPLETE_RAW_POLICY_BLOCKED"
+                    decision = "CLIPPED_ROLLOUT_COMPLETE_RAW_POLICY_BLOCKED"
                     exit_ok = True
                 else:
                     decision = "BLOCKED"
@@ -646,8 +673,15 @@ def main() -> None:
                 decision = "BLOCKED"
             report.write("\nSummary\n")
             report.write(f"Completed steps: {completed}/{max_steps}\n")
-            report.write(f"Elapsed: {elapsed:.6f} s\n")
-            report.write(f"Observed rate: {observed_rate:.3f} Hz\n")
+            if args.execute_clipped_step:
+                report.write(f"End-to-end elapsed including motion: {elapsed:.6f} s\n")
+                report.write(
+                    f"Single-step inference-only rate: {inference_rate:.3f} Hz "
+                    "(not a sustained-rate measurement)\n"
+                )
+            else:
+                report.write(f"Elapsed: {elapsed:.6f} s\n")
+                report.write(f"Observed rate: {observed_rate:.3f} Hz\n")
             report.write(f"Latency median: {latency_median:.3f} ms\n")
             report.write(f"Latency p95: {latency_p95:.3f} ms\n")
             report.write(f"Latency maximum: {latency_max:.3f} ms\n")

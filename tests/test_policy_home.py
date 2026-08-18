@@ -85,10 +85,13 @@ def make_config() -> dict:
             "gripper_goal_time_s": 2.0,
             "max_home_tracking_error_rad": 0.03,
             "max_home_gripper_error_m": 0.002,
-            "clipped_single_step": {
+            "clipped_rollout": {
+                "max_steps": 3,
                 "max_joint_delta_rad": 0.02,
                 "max_gripper_delta_m": 0.001,
-                "goal_time_s": 2.0,
+                "max_cumulative_joint_delta_rad": 0.04,
+                "max_cumulative_gripper_delta_m": 0.002,
+                "goal_time_s": 1.0,
                 "max_arm_tracking_error_rad": 0.02,
                 "max_gripper_tracking_error_m": 0.001,
             },
@@ -130,7 +133,8 @@ def test_execute_bounded_policy_step_clips_then_tracks() -> None:
     session.prepare()
 
     result = session.execute_bounded_policy_step(
-        [0.5, 2.0, 1.5, -1.0, 0.5, 0.5, 0.02]
+        [0.5, 2.0, 1.5, -1.0, 0.5, 0.5, 0.02],
+        [0.0, 1.0, 0.5, 0.6, 0.0, 0.0, 0.0],
     )
 
     assert result.commanded == pytest.approx(
@@ -139,4 +143,18 @@ def test_execute_bounded_policy_step_clips_then_tracks() -> None:
     assert result.max_commanded_arm_delta_rad == pytest.approx(0.02)
     assert result.commanded_gripper_delta_m == pytest.approx(0.001)
     assert result.observed == pytest.approx(result.commanded)
+    session.close()
+
+
+def test_bounded_policy_steps_stop_at_cumulative_home_envelope() -> None:
+    driver = FakeHomeDriver()
+    session = PolicyHomeSession(make_api(driver), make_config(), timeout=20.0)
+    preparation = session.prepare()
+    reference = list(preparation.observed)
+
+    for _ in range(3):
+        result = session.execute_bounded_policy_step([3.0] * 7, reference)
+
+    assert result.commanded[:6] == pytest.approx([0.04, 1.04, 0.54, 0.64, 0.04, 0.04])
+    assert result.commanded[6] == pytest.approx(0.002)
     session.close()

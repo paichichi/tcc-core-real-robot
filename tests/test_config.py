@@ -14,9 +14,12 @@ def test_initial_revision_disables_actuation() -> None:
     assert config["policy_evaluation"]["inference_warmup_steps"] >= 1
     assert config["policy_evaluation"]["minimum_observed_rate_hz"] == 18.0
     assert config["policy_evaluation"]["camera_capture_fps"] == 30.0
-    clipped = config["policy_evaluation"]["clipped_single_step"]
+    clipped = config["policy_evaluation"]["clipped_rollout"]
+    assert clipped["max_steps"] == 3
     assert clipped["max_joint_delta_rad"] <= 0.02
     assert clipped["max_gripper_delta_m"] <= 0.001
+    assert clipped["max_cumulative_joint_delta_rad"] <= 0.04
+    assert clipped["max_cumulative_gripper_delta_m"] <= 0.002
 
 
 def test_dataset_scope_is_four_tasks() -> None:

@@ -164,20 +164,35 @@ class PolicyHomeSession:
     def execute_bounded_policy_step(
         self,
         raw_target: list[float],
+        reference: list[float],
     ) -> BoundedPolicyStep:
         """Execute exactly one policy step after clipping it around current state."""
         if self.driver is None or not self.configured:
             raise RuntimeError("Home session is not connected")
         if len(raw_target) != 7 or not all(isfinite(value) for value in raw_target):
             raise ValueError("Policy target must contain seven finite values")
+        if len(reference) != 7 or not all(isfinite(value) for value in reference):
+            raise ValueError("Rollout reference must contain seven finite values")
 
-        settings = self.config["policy_evaluation"]["clipped_single_step"]
+        settings = self.config["policy_evaluation"]["clipped_rollout"]
         max_arm_delta = float(settings["max_joint_delta_rad"])
         max_gripper_delta = float(settings["max_gripper_delta_m"])
+        max_cumulative_arm_delta = float(
+            settings["max_cumulative_joint_delta_rad"]
+        )
+        max_cumulative_gripper_delta = float(
+            settings["max_cumulative_gripper_delta_m"]
+        )
         goal_time = float(settings["goal_time_s"])
         max_arm_tracking_error = float(settings["max_arm_tracking_error_rad"])
         max_gripper_tracking_error = float(settings["max_gripper_tracking_error_m"])
-        if max_arm_delta <= 0 or max_gripper_delta <= 0 or goal_time <= 0.2:
+        if (
+            max_arm_delta <= 0
+            or max_gripper_delta <= 0
+            or max_cumulative_arm_delta < max_arm_delta
+            or max_cumulative_gripper_delta < max_gripper_delta
+            or goal_time <= 0.2
+        ):
             raise ValueError("Clipped single-step limits and goal time are invalid")
 
         start = self.read_positions()
@@ -189,8 +204,15 @@ class PolicyHomeSession:
             zip(start, raw_target, limits, strict=True)
         ):
             maximum_delta = max_arm_delta if index < 6 else max_gripper_delta
+            maximum_cumulative_delta = (
+                max_cumulative_arm_delta
+                if index < 6
+                else max_cumulative_gripper_delta
+            )
             delta = max(-maximum_delta, min(maximum_delta, target - current))
             bounded = current + delta
+            bounded = max(reference[index] - maximum_cumulative_delta, bounded)
+            bounded = min(reference[index] + maximum_cumulative_delta, bounded)
             bounded = max(float(limit.position_min), bounded)
             bounded = min(float(limit.position_max), bounded)
             commanded.append(bounded)
