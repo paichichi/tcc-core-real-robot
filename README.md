@@ -29,6 +29,21 @@ ls -l /dev/v4l/by-id/
 ls -l /dev/video*
 ```
 
+直接抓取所有视频节点并显示带编号的画面：
+
+```bash
+python scripts/preview_cameras.py
+```
+
+在弹出的总览中人工判断哪一个画面是主相机、哪一个是腕部相机。按 `q`
+或 `Esc` 关闭窗口。总览同时保存到 `outputs/camera_probe_<timestamp>.jpg`。
+
+如果驱动电脑没有图形界面：
+
+```bash
+python scripts/preview_cameras.py --no-display
+```
+
 ## 4. 下载并校验模型
 
 ```bash
