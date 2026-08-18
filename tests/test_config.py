@@ -10,6 +10,9 @@ def test_initial_revision_disables_actuation() -> None:
     assert_actuation_disabled(config)
     assert config["safety"]["dry_run_by_default"] is True
     assert config["safety"]["require_emergency_stop_ready"] is True
+    assert config["robot"]["home_gripper_position_m"] == 0.0
+    assert config["policy_evaluation"]["inference_warmup_steps"] >= 1
+    assert config["policy_evaluation"]["minimum_observed_rate_hz"] == 18.0
 
 
 def test_dataset_scope_is_four_tasks() -> None:

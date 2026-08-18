@@ -12,7 +12,7 @@ source .venv/bin/activate
 ## 2. 安装 eval 依赖
 
 ```bash
-python -m pip install -e '.[eval,dev]'
+python -m pip install -e '.[eval,robot,dev]'
 ```
 
 ## 3. 确认两个相机的 Linux 路径
@@ -100,6 +100,7 @@ python scripts/run_policy.py \
   --tcc-source-root /home/robotarm/TCC-core \
   --offline \
   --device auto \
+  --execute-home \
   --max-steps 10
 ```
 
@@ -122,6 +123,9 @@ Decision: PASS
 同时检查：
 
 - `Completed steps: 10/10`
+- `home_staging_completed: PASS`
+- `first_arm_delta_safe: PASS`
+- `first_gripper_delta_safe: PASS`
 - 两个相机分辨率没有报错
 - 每一步都输出 7 维有限数值
 - `inference_ms` 和 `Observed rate` 满足实时运行需求
@@ -140,6 +144,7 @@ python scripts/run_policy.py \
   --tcc-source-root /home/robotarm/TCC-core \
   --offline \
   --device auto \
+  --execute-home \
   --max-steps 359
 ```
 
@@ -154,4 +159,9 @@ strawberry
 
 ## 安全状态
 
-当前 `run_policy.py` 是 shadow-only。不要添加 `--execute`；该参数会被安全检查主动拒绝。预测动作只会写入 TXT 报告，不会发送给 Trossen 机械臂。
+当前 policy 仍是 shadow-only。`--execute-home` 只会用 10 秒把六个关节慢速移动到
+`dataset_collection_home`，把夹爪设为 demo 首帧的 `0 m`，并在 eval 期间保持；
+它不会执行 policy 预测。程序退出时会恢复所有关节为 Idle。
+
+不要添加 `--execute`；该参数仍会被安全检查主动拒绝。只有当 home tracking、
+第 0 步动作差值、推理频率等检查全部通过时，TXT 报告才会给出 `Decision: PASS`。

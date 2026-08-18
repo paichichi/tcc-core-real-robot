@@ -72,7 +72,7 @@ Install the evaluation dependencies, identify the two stable Linux camera
 device paths, and run the trained checkpoint without connecting to the robot:
 
 ```bash
-python -m pip install -e '.[eval,dev]'
+python -m pip install -e '.[eval,robot,dev]'
 python scripts/run_policy.py \
   --backbone ours_rn50 \
   --demonstrations 60 \
@@ -81,6 +81,7 @@ python scripts/run_policy.py \
   --cam-wrist /dev/v4l/by-id/WRIST_CAMERA \
   --tcc-source-root /path/to/TCC-core \
   --offline \
+  --execute-home \
   --max-steps 10
 ```
 
@@ -90,10 +91,11 @@ normalization used during feature caching, predicts denormalized 7-D absolute
 actions, and writes a human-readable report under `outputs/`. Use the full 359
 steps only after the 10-step camera and latency smoke test passes.
 
-`run_policy.py` is deliberately shadow-only. Passing `--execute` fails closed
-while `configs/robot.yaml` still marks the action contract unverified and the
-workspace limits as calibrating. Shadow output is not sent to the Trossen
-driver.
+`run_policy.py` keeps policy predictions shadow-only. `--execute-home` is a
+separate, explicit staging action: it moves slowly to the median first state of
+the 400 demonstrations, holds that pose, checks the first predicted action
+against the measured state, then restores Idle. Passing `--execute` still
+fails closed; shadow output is never sent to the Trossen driver.
 
 ## Train
 
