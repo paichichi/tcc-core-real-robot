@@ -12,7 +12,7 @@ source .venv/bin/activate
 ## 2. 安装 eval 依赖
 
 ```bash
-python -m pip install -e '.[eval,robot,dev]'
+python -m pip install -e '.[train,eval,robot,dev]'
 ```
 
 ## 3. 确认两个相机的 Linux 路径
@@ -86,7 +86,26 @@ find /home/robotarm -path '*/xirl/models.py' -print
 
 那么 `--tcc-source-root` 应填写 `/home/robotarm/TCC-core`。
 
-## 6. 运行 10 步 shadow eval
+## 6. 先运行 demo 首帧离线诊断
+
+这个命令不连接机械臂。它读取 10 个实际训练 episode 的两路首帧，比较 policy
+预测、记录 action 和首帧 state：
+
+```bash
+python scripts/eval_demo_first_frames.py \
+  --backbone ours_rn50 \
+  --demonstrations 60 \
+  --task carrot \
+  --episodes 10 \
+  --tcc-source-root /home/robotarm/TCC-core \
+  --offline \
+  --device auto
+```
+
+结果保存到 `outputs/demo_first_frames_*.txt`。如果结果为 `BLOCKED`，先检查
+policy 训练和输入预处理，不要继续真实动作执行。
+
+## 7. 运行 10 步 shadow eval
 
 如果 TCC-Core 位于 `/home/robotarm/TCC-core`，可以直接运行：
 
@@ -104,7 +123,7 @@ python scripts/run_policy.py \
   --max-steps 10
 ```
 
-## 7. 检查输出
+## 8. 检查输出
 
 ```bash
 ls -lt outputs/policy_shadow_*.txt | head
@@ -130,7 +149,7 @@ Decision: PASS
 - 每一步都输出 7 维有限数值
 - `inference_ms` 和 `Observed rate` 满足实时运行需求
 
-## 8. 运行完整 359 步 shadow eval
+## 9. 运行完整 359 步 shadow eval
 
 10 步测试通过后，将 `--max-steps` 改成 359：
 

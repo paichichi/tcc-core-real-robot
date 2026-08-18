@@ -68,11 +68,27 @@ is given.
 
 ## Shadow evaluation
 
-Install the evaluation dependencies, identify the two stable Linux camera
-device paths, and run the trained checkpoint without connecting to the robot:
+Before using live cameras, evaluate recorded training-demo first frames:
 
 ```bash
-python -m pip install -e '.[eval,robot,dev]'
+python scripts/eval_demo_first_frames.py \
+  --backbone ours_rn50 \
+  --demonstrations 60 \
+  --task carrot \
+  --episodes 10 \
+  --tcc-source-root /path/to/TCC-core \
+  --offline
+```
+
+This separates a policy/checkpoint failure from live camera domain shift by
+comparing each prediction with the recorded first-frame action and state. It
+never imports the robot driver.
+
+Then identify the two stable Linux camera device paths and run the trained
+checkpoint in shadow mode:
+
+```bash
+python -m pip install -e '.[train,eval,robot,dev]'
 python scripts/run_policy.py \
   --backbone ours_rn50 \
   --demonstrations 60 \
