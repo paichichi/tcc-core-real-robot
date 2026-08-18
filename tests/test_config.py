@@ -16,3 +16,17 @@ def test_dataset_scope_is_four_tasks() -> None:
     config = load_yaml(ROOT / "configs" / "experiment.yaml")
     assert config["dataset"]["demonstrations_per_task"] == 100
     assert len(config["dataset"]["tasks"]) == 4
+
+
+def test_first_policy_is_single_step_offline_bc() -> None:
+    config = load_yaml(ROOT / "configs" / "experiment.yaml")
+    policy = config["policy"]
+    assert policy["implementation"] == "tcc_mlp_bc_v0"
+    assert policy["hidden_dimensions"] == [256, 256]
+    assert policy["action_chunk_size"] == 1
+    assert policy["proprioception"] is False
+    assert config["evaluation"]["max_rollout_steps"] == 359
+    assert config["split"]["train_episodes_per_task"] == 60
+    assert config["split"]["validation_episodes_per_task"] == 0
+    assert config["split"]["test_episodes_per_task"] == 0
+    assert "horizon" not in policy

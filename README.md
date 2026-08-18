@@ -16,6 +16,7 @@ emergency stop, and action convention have been verified on site.
 - Cameras: `cam_main` and `cam_wrist`, 640 x 480 RGB at 20 FPS
 - Dataset: `UoA-Trossen-Arm/pick_and_place_4_object_diverse`
 - Policy protocol: to be locked after the first read-only data audit
+- First policy baseline: frozen dual-camera TCC features + single-step MLP BC
 
 The dataset metadata reports 7-D action and state vectors. Their numerical
 ranges suggest absolute joint targets plus a gripper value, but this is a
@@ -83,6 +84,14 @@ does not clear controller faults, change joint modes, or send motion commands.
 `monitor_robot.py` applies the same restrictions while sampling state repeatedly.
 
 Before any future actuation, complete every item in [docs/SAFETY.md](docs/SAFETY.md).
+
+## Offline policy training
+
+The initial, non-actuating policy implementation is documented in
+[docs/POLICY.md](docs/POLICY.md). It caches frozen TCC features for both camera
+streams, then trains a `[256, 256]` ReLU MLP to predict one normalized 7-D
+action. Training and feature caching contain no robot driver imports or motion
+commands.
 
 ## Workspace calibration
 

@@ -3,7 +3,8 @@ seed: 1
 
 dataset:
   repository: UoA-Trossen-Arm/pick_and_place_4_object_diverse
-  revision: TBD
+  revision: 6ce893dc73fc6310ccbd46786f71a03a5b6a3da2
+  local_root: datasets/pick_and_place_4_object_diverse
   demonstrations_per_task: 100
   tasks:
     - pick_and_place_carrot_100
@@ -20,11 +21,38 @@ observations:
 
 backbone:
   checkpoint: TBD
+  tcc_source_root: TBD
   frozen: true
+  image_size: 224
+  feature_cache_dtype: float16
 
 policy:
-  implementation: TBD
+  implementation: tcc_mlp_bc_v0
+  cameras:
+    - cam_main
+    - cam_wrist
+  shared_camera_backbone: true
+  task_conditioning: one_hot
+  number_of_tasks: 4
+  proprioception: false
+  action_dim: 7
+  action_chunk_size: 1
+  hidden_dimensions: [256, 256]
+  activation: relu
+  input_batch_norm: true
+  optimizer: adam
+  loss: mse
   training_steps: 50000
   batch_size: 32
   learning_rate: 0.001
-  horizon: 100
+  log_every: 1000
+
+evaluation:
+  # This is a rollout timeout, not an action-prediction chunk length.
+  max_rollout_steps: 359
+
+split:
+  train_episodes_per_task: 60
+  validation_episodes_per_task: 0
+  test_episodes_per_task: 0
+  unused_episodes_per_task: 40
