@@ -1,1 +1,1 @@
-python scripts/probe_workspace_axis.py --axis y --direction negative --auto --execute
+python scripts/probe_workspace_axis.py --axis z --direction negative --execute
