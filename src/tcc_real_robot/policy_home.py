@@ -161,6 +161,43 @@ class PolicyHomeSession:
             raise RuntimeError("Controller returned invalid joint positions")
         return positions
 
+    def read_cartesian_positions(self) -> list[float]:
+        """Read the six-dimensional Cartesian tool pose."""
+        if self.driver is None or not self.configured:
+            raise RuntimeError("Home session is not connected")
+        positions = [float(value) for value in self.driver.get_cartesian_positions()]
+        if len(positions) != 6 or not all(isfinite(value) for value in positions):
+            raise RuntimeError("Controller returned invalid Cartesian positions")
+        return positions
+
+    def move_cartesian(
+        self,
+        target: list[float],
+        *,
+        goal_time_s: float,
+        trajectory_check_samples: int,
+    ) -> list[float]:
+        """Move to one checked Cartesian target and return the observed pose."""
+        if self.driver is None or not self.configured:
+            raise RuntimeError("Home session is not connected")
+        if len(target) != 6 or not all(isfinite(value) for value in target):
+            raise ValueError("Cartesian target must contain six finite values")
+        if goal_time_s <= 0.2:
+            raise ValueError("Cartesian goal time must exceed 0.2 seconds")
+        if trajectory_check_samples <= 0:
+            raise ValueError("Trajectory check samples must be positive")
+        self.driver.set_cartesian_positions(
+            target,
+            self.driver_api.InterpolationSpace.cartesian,
+            goal_time=goal_time_s,
+            blocking=True,
+            num_trajectory_check_samples=trajectory_check_samples,
+        )
+        error = str(self.driver.get_error_information())
+        if error.lower() != "no error":
+            raise RuntimeError(f"Controller reports an error: {error}")
+        return self.read_cartesian_positions()
+
     def execute_bounded_policy_step(
         self,
         raw_target: list[float],

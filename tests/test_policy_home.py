@@ -55,6 +55,26 @@ class FakeHomeDriver:
     def get_all_positions(self) -> list[float]:
         return self.arm + [self.gripper]
 
+    def get_cartesian_positions(self) -> list[float]:
+        return [0.25, 0.0, 0.16, 0.0, 0.0, 0.0]
+
+    def set_cartesian_positions(
+        self,
+        target: list[float],
+        interpolation_space: str,
+        *,
+        goal_time: float,
+        blocking: bool,
+        num_trajectory_check_samples: int,
+    ) -> None:
+        self.cartesian_command = (
+            target,
+            interpolation_space,
+            goal_time,
+            blocking,
+            num_trajectory_check_samples,
+        )
+
     def cleanup(self, reboot_controller: bool) -> None:
         assert reboot_controller is False
         self.cleaned = True
@@ -65,6 +85,7 @@ def make_api(driver: FakeHomeDriver) -> SimpleNamespace:
         Model=SimpleNamespace(wxai_v0="model"),
         StandardEndEffector=SimpleNamespace(wxai_v0_follower="end-effector"),
         Mode=SimpleNamespace(position="position", idle="idle"),
+        InterpolationSpace=SimpleNamespace(cartesian="cartesian"),
         TrossenArmDriver=lambda: driver,
     )
 
@@ -157,4 +178,20 @@ def test_bounded_policy_steps_stop_at_cumulative_home_envelope() -> None:
 
     assert result.commanded[:6] == pytest.approx([0.06, 1.06, 0.56, 0.66, 0.06, 0.06])
     assert result.commanded[6] == pytest.approx(0.003)
+    session.close()
+
+
+def test_cartesian_move_uses_checked_cartesian_interpolation() -> None:
+    driver = FakeHomeDriver()
+    session = PolicyHomeSession(make_api(driver), make_config(), timeout=20.0)
+    session.prepare()
+
+    observed = session.move_cartesian(
+        [0.25, 0.0, 0.162, 0.0, 0.0, 0.0],
+        goal_time_s=0.75,
+        trajectory_check_samples=1000,
+    )
+
+    assert observed == pytest.approx([0.25, 0.0, 0.16, 0.0, 0.0, 0.0])
+    assert driver.cartesian_command[1:] == ("cartesian", 0.75, True, 1000)
     session.close()

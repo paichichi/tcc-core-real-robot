@@ -117,3 +117,17 @@ diagnostic_tests:
     max_downward_step_m: 0.005
     max_tracking_error_m: 0.005
     trajectory_check_samples: 1000
+
+workspace_probe:
+  step_m: 0.002
+  goal_time_s: 0.75
+  return_goal_time_s: 2.0
+  max_tracking_error_m: 0.005
+  trajectory_check_samples: 1000
+  hard_travel_limits_m:
+    x_positive: 0.10
+    x_negative: 0.10
+    y_positive: 0.10
+    y_negative: 0.10
+    z_positive: 0.10
+    z_negative: 0.02
