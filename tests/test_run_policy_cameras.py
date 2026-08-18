@@ -20,7 +20,7 @@ def load_run_policy() -> Any:
 class FakeCapture:
     def __init__(self, grabs: list[bool]) -> None:
         self.grabs = iter(grabs)
-        self.frame = np.zeros((2, 3, 3), dtype=np.uint8)
+        self.frame = np.arange(18, dtype=np.uint8).reshape(2, 3, 3)
 
     def isOpened(self) -> bool:  # noqa: N802 - mirror OpenCV API
         return True
@@ -92,4 +92,27 @@ def test_camera_pair_error_identifies_the_failed_stream() -> None:
     )
 
     with pytest.raises(RuntimeError, match="main_grab=PASS, wrist_grab=FAIL"):
+        cameras.read_rgb_pair()
+
+
+def test_camera_pair_rejects_a_solid_green_frame() -> None:
+    module = load_run_policy()
+    main = FakeCapture([True])
+    wrist = FakeCapture([True])
+    wrist.frame = np.full((4, 5, 3), (0, 255, 0), dtype=np.uint8)
+    cv2 = FakeCV2([main, wrist])
+    cameras = module.SynchronizedCameras(
+        cv2,
+        "/dev/video10",
+        "/dev/video2",
+        640,
+        480,
+        20.0,
+        startup_delay_s=0.0,
+        read_attempts=1,
+        retry_delay_s=0.0,
+        minimum_channel_std=2.0,
+    )
+
+    with pytest.raises(RuntimeError, match="wrist_frame=FLAT"):
         cameras.read_rgb_pair()

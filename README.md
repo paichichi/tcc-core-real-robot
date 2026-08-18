@@ -44,19 +44,20 @@ python scripts/preview_cameras.py
 python scripts/preview_cameras.py --no-display
 ```
 
-本机当前已经确认的映射：
+当前相机状态：`BLOCKED`。D405 单独 preview 恢复，但在双相机 shadow 中连续三次
+读取失败；诊断为 `main_grab=PASS, wrist_grab=FAIL`。
 
 ```text
 cam_main  = /dev/video10
-cam_wrist = /dev/video2（能够稳定返回彩色帧时优先）
-fallback  = /dev/video4
+cam_wrist = /dev/video2 (BLOCKED)
+D405 fallback/diagnostic node = /dev/video4
 ```
 
-`/dev/video2` 曾出现 `READ FAILED`，之后又恢复返回彩色帧；该节点目前存在间歇性
-超时。它与 demo 中 `cam_wrist` 的颜色更接近，因此正常时优先使用。`/dev/video4`
-可以作为读取失败时的临时 fallback，但它有明显绿色偏色，相对于 demo 存在潜在的
-视觉 domain shift；在解决颜色输入差异前，其 shadow 预测只能用于诊断，不能据此
-启用真实 policy 动作。
+D405 曾在 `/dev/video2` 和 `/dev/video4` 同时返回纯绿色无效帧。重置后单独 preview
+恢复，但双相机 shadow 仍在第 0 步前失败：主相机读取成功，D405 读取失败。因此不再
+重复 OpenCV home-staged eval；下一步必须用官方 `pyrealsense2` 按 serial 和明确的
+color/BGR8 profile 验证 D405，并最终替换不稳定的 `/dev/video*` 采集路径。代码侧的
+启动重试和 flat-frame 检查仍作为 fail-closed 防护。
 
 `/dev/video*` 编号和可用流可能在重启或重新插拔 USB 后改变，因此每次正式 eval
 前都应重新运行 `preview_cameras.py` 检查画面。如果目标节点出现 `READ FAILED`，

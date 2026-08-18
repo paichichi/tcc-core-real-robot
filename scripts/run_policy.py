@@ -51,6 +51,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--camera-startup-delay", type=float, default=1.0)
     parser.add_argument("--camera-read-attempts", type=int, default=3)
     parser.add_argument("--camera-retry-delay", type=float, default=0.25)
+    parser.add_argument("--camera-min-channel-std", type=float, default=2.0)
     parser.add_argument("--inference-warmup-steps", type=int)
     parser.add_argument("--controller-timeout", type=float, default=20.0)
     parser.add_argument(
@@ -89,6 +90,7 @@ class SynchronizedCameras:
         startup_delay_s: float = 1.0,
         read_attempts: int = 3,
         retry_delay_s: float = 0.25,
+        minimum_channel_std: float = 2.0,
     ) -> None:
         if startup_delay_s < 0:
             raise ValueError("startup_delay_s must be non-negative")
@@ -96,9 +98,12 @@ class SynchronizedCameras:
             raise ValueError("read_attempts must be positive")
         if retry_delay_s < 0:
             raise ValueError("retry_delay_s must be non-negative")
+        if minimum_channel_std < 0:
+            raise ValueError("minimum_channel_std must be non-negative")
         self.cv2 = cv2
         self.read_attempts = read_attempts
         self.retry_delay_s = retry_delay_s
+        self.minimum_channel_std = minimum_channel_std
         self.main = cv2.VideoCapture(_camera_source(main_source))
         self.wrist = cv2.VideoCapture(_camera_source(wrist_source))
         for name, capture in (("cam_main", self.main), ("cam_wrist", self.wrist)):
@@ -122,10 +127,26 @@ class SynchronizedCameras:
                 main_retrieved = bool(main_ok and main_bgr is not None)
                 wrist_retrieved = bool(wrist_ok and wrist_bgr is not None)
                 if main_retrieved and wrist_retrieved:
-                    return (
-                        self.cv2.cvtColor(main_bgr, self.cv2.COLOR_BGR2RGB),
-                        self.cv2.cvtColor(wrist_bgr, self.cv2.COLOR_BGR2RGB),
+                    main_rgb = self.cv2.cvtColor(main_bgr, self.cv2.COLOR_BGR2RGB)
+                    wrist_rgb = self.cv2.cvtColor(wrist_bgr, self.cv2.COLOR_BGR2RGB)
+                    main_std = np.std(main_rgb, axis=(0, 1))
+                    wrist_std = np.std(wrist_rgb, axis=(0, 1))
+                    main_valid = float(np.max(main_std)) >= self.minimum_channel_std
+                    wrist_valid = (
+                        float(np.max(wrist_std)) >= self.minimum_channel_std
                     )
+                    if main_valid and wrist_valid:
+                        return main_rgb, wrist_rgb
+                    last_status = (
+                        f"attempt={attempt}, main_frame="
+                        f"{'PASS' if main_valid else 'FLAT'}, wrist_frame="
+                        f"{'PASS' if wrist_valid else 'FLAT'}, "
+                        f"main_channel_std={main_std.round(3).tolist()}, "
+                        f"wrist_channel_std={wrist_std.round(3).tolist()}"
+                    )
+                    if attempt < self.read_attempts and self.retry_delay_s:
+                        time.sleep(self.retry_delay_s)
+                    continue
                 last_status = (
                     f"attempt={attempt}, main_grab=PASS, wrist_grab=PASS, "
                     f"main_retrieve={'PASS' if main_retrieved else 'FAIL'}, "
@@ -196,6 +217,8 @@ def main() -> None:
         raise SystemExit("--camera-read-attempts must be positive")
     if args.camera_retry_delay < 0:
         raise SystemExit("--camera-retry-delay must be non-negative")
+    if args.camera_min_channel_std < 0:
+        raise SystemExit("--camera-min-channel-std must be non-negative")
     if args.controller_timeout <= 0:
         raise SystemExit("--controller-timeout must be positive")
     config = load_yaml(args.config)
@@ -282,6 +305,9 @@ def main() -> None:
         report.write(f"Camera startup delay: {args.camera_startup_delay:.3f} s\n")
         report.write(f"Camera read attempts: {args.camera_read_attempts}\n")
         report.write(f"Camera retry delay: {args.camera_retry_delay:.3f} s\n")
+        report.write(
+            f"Camera minimum channel std: {args.camera_min_channel_std:.3f}\n"
+        )
         report.write(f"Requested rate: {fps:.3f} Hz\n")
         report.write(f"Inference warmup steps: {inference_warmup_steps}\n")
         report.write(f"Maximum steps: {max_steps}\n\n")
@@ -338,6 +364,7 @@ def main() -> None:
                 startup_delay_s=args.camera_startup_delay,
                 read_attempts=args.camera_read_attempts,
                 retry_delay_s=args.camera_retry_delay,
+                minimum_channel_std=args.camera_min_channel_std,
             ) as cameras:
                 for _ in range(args.warmup_frames):
                     cameras.read_rgb_pair()
