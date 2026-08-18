@@ -2,7 +2,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from tcc_real_robot.policy import ActionNormalizer, TCCMLPPolicy
+from tcc_real_robot.policy import ActionNormalizer, TCCMLPPolicy  # noqa: E402
 
 
 def test_two_camera_policy_predicts_one_action() -> None:

@@ -21,12 +21,17 @@ class FakeCapture:
     def __init__(self, grabs: list[bool]) -> None:
         self.grabs = iter(grabs)
         self.frame = np.arange(18, dtype=np.uint8).reshape(2, 3, 3)
+        self.properties: dict[int, float] = {}
 
     def isOpened(self) -> bool:  # noqa: N802 - mirror OpenCV API
         return True
 
-    def set(self, *_: object) -> bool:
+    def set(self, key: int, value: float) -> bool:
+        self.properties[key] = value
         return True
+
+    def get(self, key: int) -> float:
+        return self.properties.get(key, 0.0)
 
     def grab(self) -> bool:
         return next(self.grabs)
@@ -42,12 +47,15 @@ class FakeCV2:
     CAP_PROP_FRAME_WIDTH = 1
     CAP_PROP_FRAME_HEIGHT = 2
     CAP_PROP_FPS = 3
-    COLOR_BGR2RGB = 4
+    CAP_PROP_BUFFERSIZE = 4
+    CAP_PROP_FOURCC = 5
+    CAP_V4L2 = 6
+    COLOR_BGR2RGB = 7
 
     def __init__(self, captures: list[FakeCapture]) -> None:
         self.captures = iter(captures)
 
-    def VideoCapture(self, _: object) -> FakeCapture:  # noqa: N802
+    def VideoCapture(self, *_: object) -> FakeCapture:  # noqa: N802
         return next(self.captures)
 
     @staticmethod

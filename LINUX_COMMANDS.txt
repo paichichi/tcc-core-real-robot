@@ -1,1 +1,1 @@
-if command -v v4l2-ctl >/dev/null; then echo V4L2_CTL_INSTALLED; else echo V4L2_CTL_NOT_INSTALLED; fi; if test -e /dev/video2; then echo VIDEO2_EXISTS; else echo VIDEO2_MISSING; fi; if test -e /dev/video4; then echo VIDEO4_EXISTS; else echo VIDEO4_MISSING; fi
+python scripts/check_dual_camera_stream.py --cam-main /dev/video10 --cam-wrist /dev/video2 --width 640 --height 480 --camera-fps 20 --frames 10 --maximum-pair-skew-ms 50

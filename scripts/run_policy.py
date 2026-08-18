@@ -52,6 +52,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--camera-read-attempts", type=int, default=3)
     parser.add_argument("--camera-retry-delay", type=float, default=0.25)
     parser.add_argument("--camera-min-channel-std", type=float, default=2.0)
+    parser.add_argument("--camera-max-pair-skew-ms", type=float, default=50.0)
     parser.add_argument("--inference-warmup-steps", type=int)
     parser.add_argument("--controller-timeout", type=float, default=20.0)
     parser.add_argument(
@@ -91,6 +92,7 @@ class SynchronizedCameras:
         read_attempts: int = 3,
         retry_delay_s: float = 0.25,
         minimum_channel_std: float = 2.0,
+        maximum_pair_skew_ms: float = 50.0,
     ) -> None:
         if startup_delay_s < 0:
             raise ValueError("startup_delay_s must be non-negative")
@@ -100,12 +102,16 @@ class SynchronizedCameras:
             raise ValueError("retry_delay_s must be non-negative")
         if minimum_channel_std < 0:
             raise ValueError("minimum_channel_std must be non-negative")
+        if maximum_pair_skew_ms <= 0:
+            raise ValueError("maximum_pair_skew_ms must be positive")
         self.cv2 = cv2
         self.read_attempts = read_attempts
         self.retry_delay_s = retry_delay_s
         self.minimum_channel_std = minimum_channel_std
-        self.main = cv2.VideoCapture(_camera_source(main_source))
-        self.wrist = cv2.VideoCapture(_camera_source(wrist_source))
+        self.maximum_pair_skew_ms = maximum_pair_skew_ms
+        self.last_pair_skew_ms: float | None = None
+        self.main = cv2.VideoCapture(_camera_source(main_source), cv2.CAP_V4L2)
+        self.wrist = cv2.VideoCapture(_camera_source(wrist_source), cv2.CAP_V4L2)
         for name, capture in (("cam_main", self.main), ("cam_wrist", self.wrist)):
             if not capture.isOpened():
                 self.close()
@@ -113,14 +119,50 @@ class SynchronizedCameras:
             capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
             capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
             capture.set(cv2.CAP_PROP_FPS, fps)
+            capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        self.main_properties = self._properties(self.main)
+        self.wrist_properties = self._properties(self.wrist)
+        for name, properties in (
+            ("cam_main", self.main_properties),
+            ("cam_wrist", self.wrist_properties),
+        ):
+            actual_width = float(properties["width"])
+            actual_height = float(properties["height"])
+            actual_fps = float(properties["fps"])
+            if (
+                abs(actual_width - width) > 0.5
+                or abs(actual_height - height) > 0.5
+                or abs(actual_fps - fps) > 0.1
+            ):
+                self.close()
+                raise RuntimeError(
+                    f"{name} negotiated {actual_width:.0f}x{actual_height:.0f} "
+                    f"@ {actual_fps:.3f} FPS, expected strict dataset profile "
+                    f"{width}x{height} @ {fps:.3f} FPS"
+                )
         if startup_delay_s:
             time.sleep(startup_delay_s)
+
+    def _properties(self, capture: Any) -> dict[str, object]:
+        fourcc_value = int(capture.get(self.cv2.CAP_PROP_FOURCC))
+        fourcc = "".join(
+            chr((fourcc_value >> (8 * index)) & 0xFF) for index in range(4)
+        )
+        return {
+            "width": capture.get(self.cv2.CAP_PROP_FRAME_WIDTH),
+            "height": capture.get(self.cv2.CAP_PROP_FRAME_HEIGHT),
+            "fps": capture.get(self.cv2.CAP_PROP_FPS),
+            "fourcc": fourcc,
+        }
 
     def read_rgb_pair(self) -> tuple[np.ndarray, np.ndarray]:
         last_status = "no attempts made"
         for attempt in range(1, self.read_attempts + 1):
             main_grabbed = bool(self.main.grab())
+            main_grabbed_at = time.monotonic()
             wrist_grabbed = bool(self.wrist.grab())
+            wrist_grabbed_at = time.monotonic()
+            pair_skew_ms = abs(wrist_grabbed_at - main_grabbed_at) * 1000.0
             if main_grabbed and wrist_grabbed:
                 main_ok, main_bgr = self.main.retrieve()
                 wrist_ok, wrist_bgr = self.wrist.retrieve()
@@ -135,12 +177,16 @@ class SynchronizedCameras:
                     wrist_valid = (
                         float(np.max(wrist_std)) >= self.minimum_channel_std
                     )
-                    if main_valid and wrist_valid:
+                    skew_valid = pair_skew_ms <= self.maximum_pair_skew_ms
+                    if main_valid and wrist_valid and skew_valid:
+                        self.last_pair_skew_ms = pair_skew_ms
                         return main_rgb, wrist_rgb
                     last_status = (
                         f"attempt={attempt}, main_frame="
                         f"{'PASS' if main_valid else 'FLAT'}, wrist_frame="
                         f"{'PASS' if wrist_valid else 'FLAT'}, "
+                        f"pair_skew_ms={pair_skew_ms:.3f}, "
+                        f"pair_skew={'PASS' if skew_valid else 'FAIL'}, "
                         f"main_channel_std={main_std.round(3).tolist()}, "
                         f"wrist_channel_std={wrist_std.round(3).tolist()}"
                     )
@@ -150,13 +196,15 @@ class SynchronizedCameras:
                 last_status = (
                     f"attempt={attempt}, main_grab=PASS, wrist_grab=PASS, "
                     f"main_retrieve={'PASS' if main_retrieved else 'FAIL'}, "
-                    f"wrist_retrieve={'PASS' if wrist_retrieved else 'FAIL'}"
+                    f"wrist_retrieve={'PASS' if wrist_retrieved else 'FAIL'}, "
+                    f"pair_skew_ms={pair_skew_ms:.3f}"
                 )
             else:
                 last_status = (
                     f"attempt={attempt}, "
                     f"main_grab={'PASS' if main_grabbed else 'FAIL'}, "
-                    f"wrist_grab={'PASS' if wrist_grabbed else 'FAIL'}"
+                    f"wrist_grab={'PASS' if wrist_grabbed else 'FAIL'}, "
+                    f"pair_skew_ms={pair_skew_ms:.3f}"
                 )
             if attempt < self.read_attempts and self.retry_delay_s:
                 time.sleep(self.retry_delay_s)
@@ -219,6 +267,8 @@ def main() -> None:
         raise SystemExit("--camera-retry-delay must be non-negative")
     if args.camera_min_channel_std < 0:
         raise SystemExit("--camera-min-channel-std must be non-negative")
+    if args.camera_max_pair_skew_ms <= 0:
+        raise SystemExit("--camera-max-pair-skew-ms must be positive")
     if args.controller_timeout <= 0:
         raise SystemExit("--controller-timeout must be positive")
     config = load_yaml(args.config)
@@ -281,6 +331,7 @@ def main() -> None:
     decision = "FAIL"
     failure = ""
     latencies_ms: list[float] = []
+    pair_skews_ms: list[float] = []
     home_session: Any | None = None
     home_reference: list[float] | None = None
     first_arm_delta: float | None = None
@@ -302,13 +353,17 @@ def main() -> None:
         report.write(f"Device: {device}\n")
         report.write(f"Camera main: {args.cam_main}\n")
         report.write(f"Camera wrist: {args.cam_wrist}\n")
+        report.write(f"Camera capture rate: {fps:.3f} FPS (dataset metadata)\n")
         report.write(f"Camera startup delay: {args.camera_startup_delay:.3f} s\n")
         report.write(f"Camera read attempts: {args.camera_read_attempts}\n")
         report.write(f"Camera retry delay: {args.camera_retry_delay:.3f} s\n")
         report.write(
             f"Camera minimum channel std: {args.camera_min_channel_std:.3f}\n"
         )
-        report.write(f"Requested rate: {fps:.3f} Hz\n")
+        report.write(
+            f"Camera maximum pair skew: {args.camera_max_pair_skew_ms:.3f} ms\n"
+        )
+        report.write(f"Policy rollout rate: {fps:.3f} Hz\n")
         report.write(f"Inference warmup steps: {inference_warmup_steps}\n")
         report.write(f"Maximum steps: {max_steps}\n\n")
         period = 1.0 / fps
@@ -365,7 +420,12 @@ def main() -> None:
                 read_attempts=args.camera_read_attempts,
                 retry_delay_s=args.camera_retry_delay,
                 minimum_channel_std=args.camera_min_channel_std,
+                maximum_pair_skew_ms=args.camera_max_pair_skew_ms,
             ) as cameras:
+                report.write(f"Camera main negotiated: {cameras.main_properties}\n")
+                report.write(
+                    f"Camera wrist negotiated: {cameras.wrist_properties}\n\n"
+                )
                 for _ in range(args.warmup_frames):
                     cameras.read_rgb_pair()
                 for _ in range(inference_warmup_steps):
@@ -389,6 +449,9 @@ def main() -> None:
                         time.sleep(delay)
                     iteration_started = time.monotonic()
                     main_rgb, wrist_rgb = cameras.read_rgb_pair()
+                    if cameras.last_pair_skew_ms is None:
+                        raise RuntimeError("Camera pair skew was not recorded")
+                    pair_skews_ms.append(cameras.last_pair_skew_ms)
                     if main_rgb.shape != expected_resolution:
                         raise RuntimeError(
                             f"cam_main shape {main_rgb.shape} != {expected_resolution}"
@@ -423,7 +486,9 @@ def main() -> None:
                     values = ", ".join(f"{value:.7f}" for value in action.tolist())
                     report.write(
                         f"step={step:03d} elapsed_s={elapsed:.6f} "
-                        f"inference_ms={inference_ms:.3f} action=[{values}]\n"
+                        f"inference_ms={inference_ms:.3f} "
+                        f"pair_skew_ms={cameras.last_pair_skew_ms:.3f} "
+                        f"action=[{values}]\n"
                     )
             if home_session is not None:
                 home_session.close()
@@ -453,11 +518,18 @@ def main() -> None:
                 float(np.percentile(latencies_ms, 95)) if latencies_ms else float("nan")
             )
             latency_max = max(latencies_ms, default=float("nan"))
+            pair_skew_median = (
+                float(np.median(pair_skews_ms)) if pair_skews_ms else float("nan")
+            )
+            pair_skew_max = max(pair_skews_ms, default=float("nan"))
             checks = {
                 "all_steps_completed": completed == max_steps,
                 "minimum_rate_met": observed_rate
                 >= float(evaluation_settings["minimum_observed_rate_hz"]),
                 "home_staging_completed": home_reference is not None,
+                "camera_pair_skew_safe": len(pair_skews_ms) == completed
+                and completed > 0
+                and pair_skew_max <= args.camera_max_pair_skew_ms,
                 "first_arm_delta_safe": first_arm_delta is not None
                 and first_arm_delta
                 <= float(robot_config["safety"]["max_joint_delta_rad"]),
@@ -478,6 +550,8 @@ def main() -> None:
             report.write(f"Latency median: {latency_median:.3f} ms\n")
             report.write(f"Latency p95: {latency_p95:.3f} ms\n")
             report.write(f"Latency maximum: {latency_max:.3f} ms\n")
+            report.write(f"Camera pair skew median: {pair_skew_median:.3f} ms\n")
+            report.write(f"Camera pair skew maximum: {pair_skew_max:.3f} ms\n")
             if first_arm_delta is not None:
                 report.write(
                     f"First action maximum arm delta: {first_arm_delta:.7f} rad\n"

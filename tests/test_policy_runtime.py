@@ -5,8 +5,8 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from tcc_real_robot.policy import TCCMLPPolicy
-from tcc_real_robot.policy_runtime import (
+from tcc_real_robot.policy import TCCMLPPolicy  # noqa: E402
+from tcc_real_robot.policy_runtime import (  # noqa: E402
     load_policy_bundle,
     predict_action,
     preprocess_rgb_frames,
