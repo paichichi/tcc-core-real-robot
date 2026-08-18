@@ -44,6 +44,17 @@ python scripts/preview_cameras.py
 python scripts/preview_cameras.py --no-display
 ```
 
+本机当前已经确认的映射：
+
+```text
+cam_main  = /dev/video10
+cam_wrist = /dev/video2
+```
+
+`video2` 与 demo 中 `cam_wrist` 的视角和颜色分布更接近；不要使用绿色偏色
+明显的 `video4`。`/dev/video*` 编号可能在重启或重新插拔 USB 后改变，因此每次
+正式 eval 前都应重新运行 `preview_cameras.py` 检查画面。
+
 ## 4. 下载并校验模型
 
 ```bash
@@ -77,30 +88,15 @@ find /home/robotarm -path '*/xirl/models.py' -print
 
 ## 6. 运行 10 步 shadow eval
 
-先替换主相机、腕部相机和 TCC-Core 路径，然后运行：
+如果 TCC-Core 位于 `/home/robotarm/TCC-core`，可以直接运行：
 
 ```bash
 python scripts/run_policy.py \
   --backbone ours_rn50 \
   --demonstrations 60 \
   --task carrot \
-  --cam-main /dev/v4l/by-id/MAIN_CAMERA \
-  --cam-wrist /dev/v4l/by-id/WRIST_CAMERA \
-  --tcc-source-root /home/robotarm/TCC-core \
-  --offline \
-  --device auto \
-  --max-steps 10
-```
-
-如果只知道相机编号，可以临时使用：
-
-```bash
-python scripts/run_policy.py \
-  --backbone ours_rn50 \
-  --demonstrations 60 \
-  --task carrot \
-  --cam-main 0 \
-  --cam-wrist 2 \
+  --cam-main /dev/video10 \
+  --cam-wrist /dev/video2 \
   --tcc-source-root /home/robotarm/TCC-core \
   --offline \
   --device auto \
@@ -139,8 +135,8 @@ python scripts/run_policy.py \
   --backbone ours_rn50 \
   --demonstrations 60 \
   --task carrot \
-  --cam-main /dev/v4l/by-id/MAIN_CAMERA \
-  --cam-wrist /dev/v4l/by-id/WRIST_CAMERA \
+  --cam-main /dev/video10 \
+  --cam-wrist /dev/video2 \
   --tcc-source-root /home/robotarm/TCC-core \
   --offline \
   --device auto \
