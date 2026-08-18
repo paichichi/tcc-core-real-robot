@@ -30,3 +30,13 @@ def test_first_policy_is_single_step_offline_bc() -> None:
     assert config["split"]["validation_episodes_per_task"] == 0
     assert config["split"]["test_episodes_per_task"] == 0
     assert "horizon" not in policy
+
+
+def test_model_hub_is_pinned_to_an_immutable_revision() -> None:
+    config = load_yaml(ROOT / "configs" / "experiment.yaml")
+    hub = config["model_hub"]
+    assert hub["repository"] == "Chipaipai/tcc-core-real-robot-policies"
+    assert len(hub["revision"]) == 40
+    assert all(character in "0123456789abcdef" for character in hub["revision"])
+    assert config["backbone"]["source"] == "huggingface"
+    assert config["backbone"]["hub_name"] == "ours_rn50"

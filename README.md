@@ -93,6 +93,11 @@ streams, then trains a `[256, 256]` ReLU MLP to predict one normalized 7-D
 action. Training and feature caching contain no robot driver imports or motion
 commands.
 
+On a new Linux machine, fetch a pinned and SHA256-verified backbone-policy pair
+with `python scripts/fetch_policy_assets.py --backbone ours_rn50
+--demonstrations 60`. Use `ours_vit` to select the ViT experiment; after the
+first download, add `--offline` to require cached assets and avoid network use.
+
 ## Workspace calibration
 
 Workspace limits are calibrated from supervised, read-only boundary samples.

@@ -14,6 +14,7 @@ import torch
 import yaml
 from torchvision.transforms import functional as vision_f
 
+from tcc_real_robot.model_assets import resolve_backbone_asset
 from tcc_real_robot.policy_data import (
     build_episode_records,
     cache_shard_path,
@@ -28,6 +29,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, default=Path("configs/experiment.yaml"))
     parser.add_argument("--checkpoint", type=Path)
+    parser.add_argument("--hub-backbone")
+    parser.add_argument("--hub-cache-dir", type=Path)
+    parser.add_argument("--offline", action="store_true")
     parser.add_argument("--tcc-source-root", type=Path)
     parser.add_argument("--dataset-root", type=Path)
     parser.add_argument("--cache-root", type=Path, default=Path("runs/feature_cache"))
@@ -95,9 +99,22 @@ def main() -> None:
     dataset_root = resolve_path(
         config["dataset"].get("local_root"), args.dataset_root, "dataset.local_root"
     )
-    checkpoint = resolve_path(
-        config["backbone"].get("checkpoint"), args.checkpoint, "backbone.checkpoint"
-    )
+    if args.checkpoint is not None and args.hub_backbone is not None:
+        raise ValueError("Use either --checkpoint or --hub-backbone, not both")
+    if args.checkpoint is not None:
+        checkpoint = args.checkpoint.expanduser().resolve()
+    elif config["backbone"].get("source") == "huggingface" or args.hub_backbone:
+        hub_backbone = args.hub_backbone or str(config["backbone"]["hub_name"])
+        checkpoint, _ = resolve_backbone_asset(
+            config,
+            hub_backbone,
+            cache_dir=args.hub_cache_dir,
+            local_files_only=args.offline,
+        )
+    else:
+        checkpoint = resolve_path(
+            config["backbone"].get("checkpoint"), None, "backbone.checkpoint"
+        )
     source_root = resolve_path(
         config["backbone"].get("tcc_source_root"),
         args.tcc_source_root,

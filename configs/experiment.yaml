@@ -20,11 +20,28 @@ observations:
   resolution: [640, 480]
 
 backbone:
-  checkpoint: TBD
+  source: huggingface
+  hub_name: ours_rn50
+  checkpoint: null
   tcc_source_root: TBD
   frozen: true
   image_size: 224
   feature_cache_dtype: float16
+
+model_hub:
+  repository: Chipaipai/tcc-core-real-robot-policies
+  revision: 1a5cb3785b2d4329658aa068705a40652c566962
+  backbone_manifest: backbones/manifest.json
+  policy_checkpoint_template: policies/{backbone}/{demonstrations}/checkpoint_050000.pt
+  policy_metrics_template: policies/{backbone}/{demonstrations}/metrics.json
+  supported_backbones:
+    - ours_rn50
+    - ours_vit
+    - hralign
+    - r3m_unadapted
+    - d4r_imagenet
+    - hrp_imagenet
+  supported_demonstrations: [40, 60, 80]
 
 policy:
   implementation: tcc_mlp_bc_v0

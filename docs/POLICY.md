@@ -30,14 +30,33 @@ checkpoint and evaluate it through real-robot rollouts.
 
 ## Cache frozen features
 
-Install the training dependencies and set `backbone.checkpoint` and
-`backbone.tcc_source_root` in `configs/experiment.yaml`, or pass both paths on
-the command line:
+## Fetch pinned Hub assets on Linux
+
+The model repository and full commit revision are pinned in
+`configs/experiment.yaml`. Download and verify one matched backbone-policy pair:
+
+```bash
+python scripts/fetch_policy_assets.py \
+  --backbone ours_rn50 \
+  --demonstrations 60
+```
+
+After the first successful download, the same command can run without network
+access by adding `--offline`. Select `ours_vit` or any other configured
+backbone with `--backbone`. The command verifies the backbone size and SHA256
+from the repository manifest and prints the immutable local cache paths.
+
+Feature caching also resolves the configured Hub backbone automatically. A
+local checkpoint can still be supplied explicitly with `--checkpoint`.
+
+Install the training dependencies and set `backbone.tcc_source_root` in
+`configs/experiment.yaml`, or pass the TCC-Core source path on the command
+line. The frozen checkpoint is downloaded from the pinned Hub revision by
+default:
 
 ```bash
 python -m pip install -e '.[train,dev]'
 python scripts/cache_policy_features.py \
-  --checkpoint /path/to/checkpoint_040000.pt \
   --tcc-source-root /path/to/TCC-core \
   --dataset-root /path/to/pick_and_place_4_object_diverse \
   --cache-root runs/tcc_features
