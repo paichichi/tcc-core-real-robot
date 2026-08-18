@@ -1,131 +1,146 @@
-# TCC-Core Real Robot
+# Real-Robot Policy Evaluation
 
-Real-robot evaluation workspace for transferring TCC-Core visual backbones to a
-Trossen AI Solo follower arm on four pick-and-place tasks.
+当前只运行 shadow evaluation：读取两个相机并输出 policy 预测动作，但不会连接或驱动机械臂。
 
-This repository starts deliberately with **data and environment inspection
-only**. It contains no command that actuates the arm. Motion-control code must
-be introduced separately after the robot, firmware, driver, workspace limits,
-emergency stop, and action convention have been verified on site.
+## 1. 进入项目并激活环境
 
-## Experimental scope
+```bash
+cd /home/robotarm/tcc-core-real-robot
+source .venv/bin/activate
+```
 
-- Robot: Trossen AI Solo follower (`trossen_ai_solo`)
-- Tasks: carrot, pineapple, starfruit, and strawberry pick-and-place
-- Demonstrations: 100 per task
-- Cameras: `cam_main` and `cam_wrist`, 640 x 480 RGB at 20 FPS
-- Dataset: `UoA-Trossen-Arm/pick_and_place_4_object_diverse`
-- Policy protocol: to be locked after the first read-only data audit
-- First policy baseline: frozen dual-camera TCC features + single-step MLP BC
+## 2. 安装 eval 依赖
 
-The dataset metadata reports 7-D action and state vectors. Their numerical
-ranges suggest absolute joint targets plus a gripper value, but this is a
-working hypothesis and **must not be used to command the robot until verified**.
+```bash
+python -m pip install -e '.[eval,dev]'
+```
 
-## Repository layout
+## 3. 确认两个相机的 Linux 路径
+
+```bash
+ls -l /dev/v4l/by-id/
+```
+
+记录主相机 `cam_main` 和腕部相机 `cam_wrist` 对应的路径。
+
+如果 `/dev/v4l/by-id/` 不存在，可以检查：
+
+```bash
+ls -l /dev/video*
+```
+
+## 4. 下载并校验模型
+
+```bash
+python scripts/fetch_policy_assets.py \
+  --backbone ours_rn50 \
+  --demonstrations 60
+```
+
+下载完成后，可以使用离线模式再次检查：
+
+```bash
+python scripts/fetch_policy_assets.py \
+  --backbone ours_rn50 \
+  --demonstrations 60 \
+  --offline
+```
+
+## 5. 找到 TCC-Core 源码目录
+
+```bash
+find /home/robotarm -path '*/xirl/models.py' -print
+```
+
+例如，如果结果是：
 
 ```text
-configs/             Versioned experiment and hardware assumptions
-docs/                Safety and dataset notes
-scripts/             Read-only audit utilities
-src/tcc_real_robot/  Reusable Python package
-tests/               Configuration and safety-invariant tests
+/home/robotarm/TCC-core/xirl/models.py
 ```
 
-## Setup
+那么 `--tcc-source-root` 应填写 `/home/robotarm/TCC-core`。
 
-Ubuntu 22.04 is the target runtime used beside the robot.
+## 6. 运行 10 步 shadow eval
+
+先替换主相机、腕部相机和 TCC-Core 路径，然后运行：
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e '.[dev]'
+python scripts/run_policy.py \
+  --backbone ours_rn50 \
+  --demonstrations 60 \
+  --task carrot \
+  --cam-main /dev/v4l/by-id/MAIN_CAMERA \
+  --cam-wrist /dev/v4l/by-id/WRIST_CAMERA \
+  --tcc-source-root /home/robotarm/TCC-core \
+  --offline \
+  --device auto \
+  --max-steps 10
 ```
 
-The Trossen driver is intentionally an optional dependency:
+如果只知道相机编号，可以临时使用：
 
 ```bash
-python -m pip install -e '.[robot]'
+python scripts/run_policy.py \
+  --backbone ours_rn50 \
+  --demonstrations 60 \
+  --task carrot \
+  --cam-main 0 \
+  --cam-wrist 2 \
+  --tcc-source-root /home/robotarm/TCC-core \
+  --offline \
+  --device auto \
+  --max-steps 10
 ```
 
-## Safe first checks
-
-These commands do not send robot motion commands:
+## 7. 检查输出
 
 ```bash
-python scripts/audit_dataset.py --metadata-only
-python scripts/check_robot_network.py
-python scripts/inspect_robot.py
-python scripts/monitor_robot.py --duration 5 --rate 20
-python scripts/robot_preflight.py
-pytest
+ls -lt outputs/policy_shadow_*.txt | head
 ```
 
-After a passing preflight and an on-site safety check, the explicitly gated
-position-mode hold diagnostic can be run with
-`python scripts/test_position_hold.py --execute`. It sends no motion target.
+```bash
+less "$(ls -t outputs/policy_shadow_*.txt | head -n 1)"
+```
 
-If that diagnostic passes, the next gated test is
-`python scripts/test_current_position_hold.py --execute`. It reads the current
-seven-joint position and sends that exact value back as the position target;
-it does not add an offset.
+报告末尾应出现：
 
-After that test passes, `python scripts/test_gripper_cycle.py --execute` moves
-only the gripper by 5 mm and returns it. The six arm joints stay idle.
+```text
+Decision: PASS
+```
 
-The first coordinated arm-motion diagnostic is
-`python scripts/test_whole_arm_cycle.py --execute`. It moves all six arm joints
-by a bounded 0.03 rad over three seconds, then returns them; the gripper stays
-idle.
+同时检查：
 
-`inspect_robot.py` follows the vendor's configure/read/cleanup lifecycle. It
-does not clear controller faults, change joint modes, or send motion commands.
-`monitor_robot.py` applies the same restrictions while sampling state repeatedly.
+- `Completed steps: 10/10`
+- 两个相机分辨率没有报错
+- 每一步都输出 7 维有限数值
+- `inference_ms` 和 `Observed rate` 满足实时运行需求
 
-Before any future actuation, complete every item in [docs/SAFETY.md](docs/SAFETY.md).
+## 8. 运行完整 359 步 shadow eval
 
-## Offline policy training
+10 步测试通过后，将 `--max-steps` 改成 359：
 
-The initial, non-actuating policy implementation is documented in
-[docs/POLICY.md](docs/POLICY.md). It caches frozen TCC features for both camera
-streams, then trains a `[256, 256]` ReLU MLP to predict one normalized 7-D
-action. Training and feature caching contain no robot driver imports or motion
-commands.
+```bash
+python scripts/run_policy.py \
+  --backbone ours_rn50 \
+  --demonstrations 60 \
+  --task carrot \
+  --cam-main /dev/v4l/by-id/MAIN_CAMERA \
+  --cam-wrist /dev/v4l/by-id/WRIST_CAMERA \
+  --tcc-source-root /home/robotarm/TCC-core \
+  --offline \
+  --device auto \
+  --max-steps 359
+```
 
-On a new Linux machine, fetch a pinned and SHA256-verified backbone-policy pair
-with `python scripts/fetch_policy_assets.py --backbone ours_rn50
---demonstrations 60`. Use `ours_vit` to select the ViT experiment; after the
-first download, add `--offline` to require cached assets and avoid network use.
+可用任务：
 
-## Workspace calibration
+```text
+carrot
+pineapple
+starfruit
+strawberry
+```
 
-Workspace limits are calibrated from supervised, read-only boundary samples.
-Manually place the arm at a known-safe point, make sure all joints are idle,
-then capture it with `python scripts/capture_workspace_point.py --label LABEL`.
-Capture every label listed under `workspace_calibration.required_labels` in
-`configs/robot.yaml`. The capture command never changes modes or sends targets.
+## 安全状态
 
-When the arm cannot be moved manually, start active calibration with
-`python scripts/test_cartesian_step.py --axis z --distance 0.01 --execute`.
-The script first takes 10 seconds to move the arm to the configured dataset
-collection home pose and verifies the observed joint positions. It then
-performs one trajectory-checked 1 cm step, returns to the home Cartesian
-origin, and writes a TXT report. Translation steps are hard-capped at 1 cm;
-downward Z steps are capped at 5 mm. `--execute` is the only execution gate;
-the script does not prompt for an additional typed confirmation.
-
-After this calibration step, return from the configured dataset home to the
-recorded folded pose with
-`python scripts/return_to_folded_pose.py --execute`. The command only runs when
-the arm still matches `dataset_collection_home`, moves the six arm joints over
-10 seconds, leaves the gripper idle, and restores all joints to idle afterward.
-
-## Data policy
-
-Datasets, videos, checkpoints, run directories, credentials, and local hardware
-settings are excluded from Git. Human-readable diagnostic reports under
-`outputs/` are versioned and checked by `scripts/check_output_reports.py`; every
-TXT report must contain an `Overall: PASS/FAIL` or `Decision:` verdict. Record
-the Hugging Face dataset revision in `configs/experiment.yaml` so each
-experiment remains reproducible.
+当前 `run_policy.py` 是 shadow-only。不要添加 `--execute`；该参数会被安全检查主动拒绝。预测动作只会写入 TXT 报告，不会发送给 Trossen 机械臂。

@@ -12,17 +12,14 @@ import numpy as np
 import pyarrow.parquet as pq
 import torch
 import yaml
-from torchvision.transforms import functional as vision_f
 
 from tcc_real_robot.model_assets import resolve_backbone_asset
 from tcc_real_robot.policy_data import (
     build_episode_records,
     cache_shard_path,
 )
+from tcc_real_robot.policy_runtime import preprocess_rgb_frames
 from tcc_real_robot.tcc_backbone import load_frozen_tcc_backbone
-
-IMAGENET_MEAN = torch.tensor((0.485, 0.456, 0.406)).view(1, 3, 1, 1)
-IMAGENET_STD = torch.tensor((0.229, 0.224, 0.225)).view(1, 3, 1, 1)
 
 
 def parse_args() -> argparse.Namespace:
@@ -51,13 +48,6 @@ def resolve_path(value: object, override: Path | None, name: str) -> Path:
     return Path(str(chosen)).expanduser().resolve()
 
 
-def preprocess(frames: list[np.ndarray], image_size: int) -> torch.Tensor:
-    array = np.stack(frames)
-    images = torch.from_numpy(array).permute(0, 3, 1, 2).float().div_(255.0)
-    images = vision_f.resize(images, [image_size, image_size], antialias=True)
-    return (images - IMAGENET_MEAN) / IMAGENET_STD
-
-
 @torch.inference_mode()
 def encode_camera(
     backbone: torch.nn.Module,
@@ -72,7 +62,9 @@ def encode_camera(
     def flush() -> None:
         if not frame_batch:
             return
-        batch = preprocess(frame_batch, image_size).to(device, non_blocking=True)
+        batch = preprocess_rgb_frames(frame_batch, image_size).to(
+            device, non_blocking=True
+        )
         with torch.autocast(
             device_type=device.type,
             dtype=torch.bfloat16,

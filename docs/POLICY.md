@@ -63,8 +63,37 @@ python scripts/cache_policy_features.py \
 ```
 
 The cache stores backbone features, actions, states, and task indices. It does
-not contain an inference or robot-control path. Existing episode shards are
-reused unless `--overwrite` is given.
+not actuate the robot. Existing episode shards are reused unless `--overwrite`
+is given.
+
+## Shadow evaluation
+
+Install the evaluation dependencies, identify the two stable Linux camera
+device paths, and run the trained checkpoint without connecting to the robot:
+
+```bash
+python -m pip install -e '.[eval,dev]'
+python scripts/run_policy.py \
+  --backbone ours_rn50 \
+  --demonstrations 60 \
+  --task carrot \
+  --cam-main /dev/v4l/by-id/MAIN_CAMERA \
+  --cam-wrist /dev/v4l/by-id/WRIST_CAMERA \
+  --tcc-source-root /path/to/TCC-core \
+  --offline \
+  --max-steps 10
+```
+
+The command restores the policy architecture and action normalization from the
+50,000-step checkpoint. It applies the same RGB resize and ImageNet
+normalization used during feature caching, predicts denormalized 7-D absolute
+actions, and writes a human-readable report under `outputs/`. Use the full 359
+steps only after the 10-step camera and latency smoke test passes.
+
+`run_policy.py` is deliberately shadow-only. Passing `--execute` fails closed
+while `configs/robot.yaml` still marks the action contract unverified and the
+workspace limits as calibrating. Shadow output is not sent to the Trossen
+driver.
 
 ## Train
 
