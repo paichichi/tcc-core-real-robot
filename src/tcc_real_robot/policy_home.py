@@ -202,6 +202,9 @@ class PolicyHomeSession:
         self,
         raw_target: list[float],
         reference: list[float],
+        *,
+        absolute_min: list[float] | None = None,
+        absolute_max: list[float] | None = None,
     ) -> BoundedPolicyStep:
         """Execute exactly one policy step after clipping it around current state."""
         if self.driver is None or not self.configured:
@@ -210,6 +213,17 @@ class PolicyHomeSession:
             raise ValueError("Policy target must contain seven finite values")
         if len(reference) != 7 or not all(isfinite(value) for value in reference):
             raise ValueError("Rollout reference must contain seven finite values")
+        use_absolute_limits = absolute_min is not None or absolute_max is not None
+        if use_absolute_limits:
+            if absolute_min is None or absolute_max is None:
+                raise ValueError("Both absolute action bounds must be provided")
+            if (
+                len(absolute_min) != 7
+                or len(absolute_max) != 7
+                or not all(isfinite(value) for value in (*absolute_min, *absolute_max))
+                or any(low > high for low, high in zip(absolute_min, absolute_max, strict=True))
+            ):
+                raise ValueError("Absolute action bounds must be seven finite ordered pairs")
 
         settings = self.config["policy_evaluation"]["clipped_rollout"]
         max_arm_delta = float(settings["max_joint_delta_rad"])
@@ -248,8 +262,12 @@ class PolicyHomeSession:
             )
             delta = max(-maximum_delta, min(maximum_delta, target - current))
             bounded = current + delta
-            bounded = max(reference[index] - maximum_cumulative_delta, bounded)
-            bounded = min(reference[index] + maximum_cumulative_delta, bounded)
+            if use_absolute_limits:
+                bounded = max(absolute_min[index], bounded)
+                bounded = min(absolute_max[index], bounded)
+            else:
+                bounded = max(reference[index] - maximum_cumulative_delta, bounded)
+                bounded = min(reference[index] + maximum_cumulative_delta, bounded)
             bounded = max(float(limit.position_min), bounded)
             bounded = min(float(limit.position_max), bounded)
             commanded.append(bounded)

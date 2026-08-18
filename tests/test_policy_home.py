@@ -181,6 +181,24 @@ def test_bounded_policy_steps_stop_at_cumulative_home_envelope() -> None:
     session.close()
 
 
+def test_bounded_policy_step_uses_absolute_dataset_envelope() -> None:
+    driver = FakeHomeDriver()
+    session = PolicyHomeSession(make_api(driver), make_config(), timeout=20.0)
+    preparation = session.prepare()
+
+    result = session.execute_bounded_policy_step(
+        [3.0] * 7,
+        list(preparation.observed),
+        absolute_min=[-1.0, 0.0, 0.0, -1.0, -1.0, -1.0, 0.0],
+        absolute_max=[1.0, 2.0, 1.0, 1.0, 1.0, 1.0, 0.04],
+    )
+
+    assert result.commanded == pytest.approx(
+        (0.02, 1.02, 0.52, 0.62, 0.02, 0.02, 0.001)
+    )
+    session.close()
+
+
 def test_cartesian_move_uses_checked_cartesian_interpolation() -> None:
     driver = FakeHomeDriver()
     session = PolicyHomeSession(make_api(driver), make_config(), timeout=20.0)

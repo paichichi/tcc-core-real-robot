@@ -372,6 +372,18 @@ def main() -> None:
     first_arm_delta: float | None = None
     first_gripper_delta: float | None = None
     bounded_steps: list[Any] = []
+    dataset_action_min: list[float] | None = None
+    dataset_action_max: list[float] | None = None
+    if args.execute_clipped_step:
+        task_limits = evaluation_settings["clipped_rollout"][
+            "dataset_action_limits"
+        ].get(task_name)
+        if task_limits is None:
+            raise ValueError(f"No dataset action limits configured for {task_name}")
+        dataset_action_min = [float(value) for value in task_limits["min"]]
+        dataset_action_max = [float(value) for value in task_limits["max"]]
+        if len(dataset_action_min) != 7 or len(dataset_action_max) != 7:
+            raise ValueError("Dataset action limits must contain seven values")
 
     with output_path.open("w", encoding="utf-8", buffering=1) as report:
         report.write("TCC Real-Robot Policy Evaluation\n")
@@ -408,6 +420,9 @@ def main() -> None:
         report.write(f"Policy rollout rate: {fps:.3f} Hz\n")
         report.write(f"Inference warmup steps: {inference_warmup_steps}\n")
         report.write(f"Maximum steps: {max_steps}\n\n")
+        if dataset_action_min is not None and dataset_action_max is not None:
+            report.write(f"Dataset action minimum: {dataset_action_min}\n")
+            report.write(f"Dataset action maximum: {dataset_action_max}\n\n")
         period = 1.0 / fps
         try:
             if args.execute_home:
@@ -537,6 +552,8 @@ def main() -> None:
                         bounded_step = home_session.execute_bounded_policy_step(
                             [float(value) for value in action.tolist()],
                             home_reference,
+                            absolute_min=dataset_action_min,
+                            absolute_max=dataset_action_max,
                         )
                         bounded_steps.append(bounded_step)
                         commanded_values = ", ".join(
