@@ -48,6 +48,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", default="auto")
     parser.add_argument("--max-steps", type=int)
     parser.add_argument("--warmup-frames", type=int, default=10)
+    parser.add_argument("--camera-startup-delay", type=float, default=1.0)
+    parser.add_argument("--camera-read-attempts", type=int, default=3)
+    parser.add_argument("--camera-retry-delay", type=float, default=0.25)
     parser.add_argument("--inference-warmup-steps", type=int)
     parser.add_argument("--controller-timeout", type=float, default=20.0)
     parser.add_argument(
@@ -82,8 +85,20 @@ class SynchronizedCameras:
         width: int,
         height: int,
         fps: float,
+        *,
+        startup_delay_s: float = 1.0,
+        read_attempts: int = 3,
+        retry_delay_s: float = 0.25,
     ) -> None:
+        if startup_delay_s < 0:
+            raise ValueError("startup_delay_s must be non-negative")
+        if read_attempts <= 0:
+            raise ValueError("read_attempts must be positive")
+        if retry_delay_s < 0:
+            raise ValueError("retry_delay_s must be non-negative")
         self.cv2 = cv2
+        self.read_attempts = read_attempts
+        self.retry_delay_s = retry_delay_s
         self.main = cv2.VideoCapture(_camera_source(main_source))
         self.wrist = cv2.VideoCapture(_camera_source(wrist_source))
         for name, capture in (("cam_main", self.main), ("cam_wrist", self.wrist)):
@@ -93,17 +108,40 @@ class SynchronizedCameras:
             capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
             capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
             capture.set(cv2.CAP_PROP_FPS, fps)
+        if startup_delay_s:
+            time.sleep(startup_delay_s)
 
     def read_rgb_pair(self) -> tuple[np.ndarray, np.ndarray]:
-        if not self.main.grab() or not self.wrist.grab():
-            raise RuntimeError("Failed to grab a synchronized camera pair")
-        main_ok, main_bgr = self.main.retrieve()
-        wrist_ok, wrist_bgr = self.wrist.retrieve()
-        if not main_ok or not wrist_ok or main_bgr is None or wrist_bgr is None:
-            raise RuntimeError("Failed to retrieve a synchronized camera pair")
-        return (
-            self.cv2.cvtColor(main_bgr, self.cv2.COLOR_BGR2RGB),
-            self.cv2.cvtColor(wrist_bgr, self.cv2.COLOR_BGR2RGB),
+        last_status = "no attempts made"
+        for attempt in range(1, self.read_attempts + 1):
+            main_grabbed = bool(self.main.grab())
+            wrist_grabbed = bool(self.wrist.grab())
+            if main_grabbed and wrist_grabbed:
+                main_ok, main_bgr = self.main.retrieve()
+                wrist_ok, wrist_bgr = self.wrist.retrieve()
+                main_retrieved = bool(main_ok and main_bgr is not None)
+                wrist_retrieved = bool(wrist_ok and wrist_bgr is not None)
+                if main_retrieved and wrist_retrieved:
+                    return (
+                        self.cv2.cvtColor(main_bgr, self.cv2.COLOR_BGR2RGB),
+                        self.cv2.cvtColor(wrist_bgr, self.cv2.COLOR_BGR2RGB),
+                    )
+                last_status = (
+                    f"attempt={attempt}, main_grab=PASS, wrist_grab=PASS, "
+                    f"main_retrieve={'PASS' if main_retrieved else 'FAIL'}, "
+                    f"wrist_retrieve={'PASS' if wrist_retrieved else 'FAIL'}"
+                )
+            else:
+                last_status = (
+                    f"attempt={attempt}, "
+                    f"main_grab={'PASS' if main_grabbed else 'FAIL'}, "
+                    f"wrist_grab={'PASS' if wrist_grabbed else 'FAIL'}"
+                )
+            if attempt < self.read_attempts and self.retry_delay_s:
+                time.sleep(self.retry_delay_s)
+        raise RuntimeError(
+            "Failed to read a synchronized camera pair after "
+            f"{self.read_attempts} attempts ({last_status})"
         )
 
     def close(self) -> None:
@@ -152,6 +190,12 @@ def main() -> None:
         raise SystemExit("--demonstrations must be positive")
     if args.warmup_frames < 0:
         raise SystemExit("--warmup-frames must be non-negative")
+    if args.camera_startup_delay < 0:
+        raise SystemExit("--camera-startup-delay must be non-negative")
+    if args.camera_read_attempts <= 0:
+        raise SystemExit("--camera-read-attempts must be positive")
+    if args.camera_retry_delay < 0:
+        raise SystemExit("--camera-retry-delay must be non-negative")
     if args.controller_timeout <= 0:
         raise SystemExit("--controller-timeout must be positive")
     config = load_yaml(args.config)
@@ -233,6 +277,11 @@ def main() -> None:
         report.write(f"Backbone SHA256: {assets.backbone_sha256}\n")
         report.write(f"Policy SHA256: {assets.policy_sha256}\n")
         report.write(f"Device: {device}\n")
+        report.write(f"Camera main: {args.cam_main}\n")
+        report.write(f"Camera wrist: {args.cam_wrist}\n")
+        report.write(f"Camera startup delay: {args.camera_startup_delay:.3f} s\n")
+        report.write(f"Camera read attempts: {args.camera_read_attempts}\n")
+        report.write(f"Camera retry delay: {args.camera_retry_delay:.3f} s\n")
         report.write(f"Requested rate: {fps:.3f} Hz\n")
         report.write(f"Inference warmup steps: {inference_warmup_steps}\n")
         report.write(f"Maximum steps: {max_steps}\n\n")
@@ -286,6 +335,9 @@ def main() -> None:
                 width,
                 height,
                 fps,
+                startup_delay_s=args.camera_startup_delay,
+                read_attempts=args.camera_read_attempts,
+                retry_delay_s=args.camera_retry_delay,
             ) as cameras:
                 for _ in range(args.warmup_frames):
                     cameras.read_rgb_pair()

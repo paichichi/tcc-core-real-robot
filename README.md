@@ -48,12 +48,19 @@ python scripts/preview_cameras.py --no-display
 
 ```text
 cam_main  = /dev/video10
-cam_wrist = /dev/video2
+cam_wrist = /dev/video2（能够稳定返回彩色帧时优先）
+fallback  = /dev/video4
 ```
 
-`video2` 与 demo 中 `cam_wrist` 的视角和颜色分布更接近；不要使用绿色偏色
-明显的 `video4`。`/dev/video*` 编号可能在重启或重新插拔 USB 后改变，因此每次
-正式 eval 前都应重新运行 `preview_cameras.py` 检查画面。
+`/dev/video2` 曾出现 `READ FAILED`，之后又恢复返回彩色帧；该节点目前存在间歇性
+超时。它与 demo 中 `cam_wrist` 的颜色更接近，因此正常时优先使用。`/dev/video4`
+可以作为读取失败时的临时 fallback，但它有明显绿色偏色，相对于 demo 存在潜在的
+视觉 domain shift；在解决颜色输入差异前，其 shadow 预测只能用于诊断，不能据此
+启用真实 policy 动作。
+
+`/dev/video*` 编号和可用流可能在重启或重新插拔 USB 后改变，因此每次正式 eval
+前都应重新运行 `preview_cameras.py` 检查画面。如果目标节点出现 `READ FAILED`，
+不要继续使用该节点。
 
 ## 4. 下载并校验模型
 

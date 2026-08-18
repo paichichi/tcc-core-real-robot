@@ -1,0 +1,95 @@
+from __future__ import annotations
+
+import importlib.util
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import pytest
+
+
+def load_run_policy() -> Any:
+    path = Path(__file__).parents[1] / "scripts" / "run_policy.py"
+    spec = importlib.util.spec_from_file_location("run_policy_for_test", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class FakeCapture:
+    def __init__(self, grabs: list[bool]) -> None:
+        self.grabs = iter(grabs)
+        self.frame = np.zeros((2, 3, 3), dtype=np.uint8)
+
+    def isOpened(self) -> bool:  # noqa: N802 - mirror OpenCV API
+        return True
+
+    def set(self, *_: object) -> bool:
+        return True
+
+    def grab(self) -> bool:
+        return next(self.grabs)
+
+    def retrieve(self) -> tuple[bool, np.ndarray]:
+        return True, self.frame
+
+    def release(self) -> None:
+        return None
+
+
+class FakeCV2:
+    CAP_PROP_FRAME_WIDTH = 1
+    CAP_PROP_FRAME_HEIGHT = 2
+    CAP_PROP_FPS = 3
+    COLOR_BGR2RGB = 4
+
+    def __init__(self, captures: list[FakeCapture]) -> None:
+        self.captures = iter(captures)
+
+    def VideoCapture(self, _: object) -> FakeCapture:  # noqa: N802
+        return next(self.captures)
+
+    @staticmethod
+    def cvtColor(frame: np.ndarray, _: int) -> np.ndarray:  # noqa: N802
+        return frame
+
+
+def test_camera_pair_retries_a_transient_grab_failure() -> None:
+    module = load_run_policy()
+    cv2 = FakeCV2([FakeCapture([False, True]), FakeCapture([True, True])])
+    cameras = module.SynchronizedCameras(
+        cv2,
+        "/dev/video10",
+        "/dev/video2",
+        640,
+        480,
+        20.0,
+        startup_delay_s=0.0,
+        read_attempts=2,
+        retry_delay_s=0.0,
+    )
+
+    main, wrist = cameras.read_rgb_pair()
+
+    assert main.shape == (2, 3, 3)
+    assert wrist.shape == (2, 3, 3)
+
+
+def test_camera_pair_error_identifies_the_failed_stream() -> None:
+    module = load_run_policy()
+    cv2 = FakeCV2([FakeCapture([True, True]), FakeCapture([False, False])])
+    cameras = module.SynchronizedCameras(
+        cv2,
+        "/dev/video10",
+        "/dev/video2",
+        640,
+        480,
+        20.0,
+        startup_delay_s=0.0,
+        read_attempts=2,
+        retry_delay_s=0.0,
+    )
+
+    with pytest.raises(RuntimeError, match="main_grab=PASS, wrist_grab=FAIL"):
+        cameras.read_rgb_pair()
