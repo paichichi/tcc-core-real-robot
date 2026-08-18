@@ -21,6 +21,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--height", type=int, default=480)
     parser.add_argument("--camera-fps", type=float, default=20.0)
     parser.add_argument("--frames", type=int, default=10)
+    parser.add_argument("--warmup-frames", type=int, default=5)
     parser.add_argument("--maximum-pair-skew-ms", type=float, default=50.0)
     parser.add_argument("--startup-delay", type=float, default=1.0)
     parser.add_argument("--minimum-channel-std", type=float, default=2.0)
@@ -73,6 +74,8 @@ def main() -> None:
         raise SystemExit("Width, height, camera FPS, and frames must be positive")
     if args.startup_delay < 0 or args.minimum_channel_std < 0:
         raise SystemExit("Delays and thresholds must be non-negative")
+    if args.warmup_frames < 0:
+        raise SystemExit("--warmup-frames must be non-negative")
     if args.maximum_pair_skew_ms <= 0:
         raise SystemExit("--maximum-pair-skew-ms must be positive")
 
@@ -120,6 +123,14 @@ def main() -> None:
                 report.write(f"strict_dataset_profiles_match: {profiles_match}\n")
                 if args.startup_delay:
                     time.sleep(args.startup_delay)
+                for _ in range(args.warmup_frames):
+                    main_grabbed = bool(main_camera.grab())
+                    wrist_grabbed = bool(wrist_camera.grab())
+                    if main_grabbed:
+                        main_camera.retrieve()
+                    if wrist_grabbed:
+                        wrist_camera.retrieve()
+                report.write(f"discarded_warmup_pairs: {args.warmup_frames}\n")
                 for index in range(args.frames):
                     main_grabbed = bool(main_camera.grab())
                     main_grabbed_at = time.monotonic()
