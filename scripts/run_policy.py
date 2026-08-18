@@ -389,7 +389,10 @@ def main() -> None:
         report.write("TCC Real-Robot Policy Evaluation\n")
         report.write("=======================================\n")
         if args.execute_clipped_step:
-            report.write("Mode: CLIPPED ROLLOUT (bounded per-step and from home)\n")
+            report.write(
+                "Mode: CLIPPED ROLLOUT "
+                "(bounded per-step and by dataset action envelope)\n"
+            )
         else:
             report.write("Mode: SHADOW (policy predictions are never actuated)\n")
         report.write(f"Home staging: {'ENABLED' if args.execute_home else 'NOT RUN'}\n")
@@ -649,10 +652,11 @@ def main() -> None:
                         and max(
                             item.max_commanded_arm_delta_rad for item in bounded_steps
                         )
-                        <= float(clipped["max_joint_delta_rad"]) + 1e-9,
+                        <= max(float(value) for value in clipped["max_action_delta"][:6])
+                        + 1e-9,
                         "commanded_gripper_delta_safe": bool(bounded_steps)
                         and max(item.commanded_gripper_delta_m for item in bounded_steps)
-                        <= float(clipped["max_gripper_delta_m"]) + 1e-9,
+                        <= float(clipped["max_action_delta"][6]) + 1e-9,
                         "clipped_arm_tracking_safe": bool(bounded_steps)
                         and max(
                             item.max_arm_tracking_error_rad for item in bounded_steps

@@ -226,23 +226,28 @@ class PolicyHomeSession:
                 raise ValueError("Absolute action bounds must be seven finite ordered pairs")
 
         settings = self.config["policy_evaluation"]["clipped_rollout"]
-        max_arm_delta = float(settings["max_joint_delta_rad"])
-        max_gripper_delta = float(settings["max_gripper_delta_m"])
+        max_action_delta = [float(value) for value in settings["max_action_delta"]]
         max_cumulative_arm_delta = float(
-            settings["max_cumulative_joint_delta_rad"]
+            settings.get("max_cumulative_joint_delta_rad", float("inf"))
         )
         max_cumulative_gripper_delta = float(
-            settings["max_cumulative_gripper_delta_m"]
+            settings.get("max_cumulative_gripper_delta_m", float("inf"))
         )
         goal_time = float(settings["goal_time_s"])
         max_arm_tracking_error = float(settings["max_arm_tracking_error_rad"])
         max_gripper_tracking_error = float(settings["max_gripper_tracking_error_m"])
         if (
-            max_arm_delta <= 0
-            or max_gripper_delta <= 0
-            or max_cumulative_arm_delta < max_arm_delta
-            or max_cumulative_gripper_delta < max_gripper_delta
-            or goal_time <= 0.2
+            len(max_action_delta) != 7
+            or any(value <= 0 for value in max_action_delta)
+            or (
+                not use_absolute_limits
+                and max_cumulative_arm_delta < min(max_action_delta[:6])
+            )
+            or (
+                not use_absolute_limits
+                and max_cumulative_gripper_delta < max_action_delta[6]
+            )
+            or goal_time <= 0
         ):
             raise ValueError("Clipped single-step limits and goal time are invalid")
 
@@ -254,7 +259,7 @@ class PolicyHomeSession:
         for index, (current, target, limit) in enumerate(
             zip(start, raw_target, limits, strict=True)
         ):
-            maximum_delta = max_arm_delta if index < 6 else max_gripper_delta
+            maximum_delta = max_action_delta[index]
             maximum_cumulative_delta = (
                 max_cumulative_arm_delta
                 if index < 6

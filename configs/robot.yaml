@@ -39,10 +39,10 @@ safety:
   require_operator_confirmation: true
   require_emergency_stop_ready: true
   workspace_limits: CALIBRATING
-  max_joint_delta_rad: 0.07
-  max_joint_velocity_rad_s: 1.5
-  max_gripper_delta_m: 0.003
-  max_gripper_velocity_m_s: 0.06
+  max_joint_delta_rad: 0.1323720
+  max_joint_velocity_rad_s: 2.6474401
+  max_gripper_delta_m: 0.0044294
+  max_gripper_velocity_m_s: 0.0885881
 
 policy_evaluation:
   camera_capture_fps: 30.0
@@ -53,16 +53,14 @@ policy_evaluation:
   inference_warmup_steps: 3
   minimum_observed_rate_hz: 18.0
   clipped_rollout:
-    max_steps: 40
-    max_joint_delta_rad: 0.02
-    max_gripper_delta_m: 0.001
-    max_cumulative_joint_delta_rad: 0.10
-    max_cumulative_gripper_delta_m: 0.003
+    max_steps: 359
+    max_action_delta:
+      [0.0461585, 0.0606546, 0.0850689, 0.1323720, 0.0644694, 0.0854505, 0.0044294]
     dataset_action_limits:
       pick_and_place_carrot_100:
         min: [-0.6322957, 0.5960556, 0.5220493, -1.5905623, -0.2038987, -0.9504463, -0.0004923]
         max: [0.6002518, 2.5183108, 2.3691540, 0.6891356, 0.5243381, 0.8939880, 0.0404405]
-    goal_time_s: 1.0
+    goal_time_s: 0.05
     max_arm_tracking_error_rad: 0.02
     max_gripper_tracking_error_m: 0.001
 
