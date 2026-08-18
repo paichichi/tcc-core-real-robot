@@ -1,1 +1,1 @@
-python scripts/run_policy.py --backbone ours_rn50 --demonstrations 60 --task carrot --cam-main /dev/video10 --cam-wrist /dev/video2 --tcc-source-root /home/robotarm/TCC-core --offline --device auto --execute-home --execute-clipped-step --emergency-stop-ready --max-steps 10
+python scripts/run_policy.py --backbone ours_rn50 --demonstrations 60 --task carrot --cam-main /dev/video2 --cam-wrist /dev/video10 --tcc-source-root /home/robotarm/TCC-core --offline --device auto --execute-home --max-steps 10
