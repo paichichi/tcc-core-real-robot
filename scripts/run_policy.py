@@ -293,6 +293,9 @@ def main() -> None:
         raise ValueError(f"--max-steps must be within [1, {max_configured_steps}]")
     fps = float(config["observations"]["fps"])
     evaluation_settings = robot_config["policy_evaluation"]
+    camera_capture_fps = float(evaluation_settings["camera_capture_fps"])
+    if camera_capture_fps <= 0:
+        raise ValueError("policy_evaluation.camera_capture_fps must be positive")
     inference_warmup_steps = (
         args.inference_warmup_steps
         if args.inference_warmup_steps is not None
@@ -353,7 +356,10 @@ def main() -> None:
         report.write(f"Device: {device}\n")
         report.write(f"Camera main: {args.cam_main}\n")
         report.write(f"Camera wrist: {args.cam_wrist}\n")
-        report.write(f"Camera capture rate: {fps:.3f} FPS (dataset metadata)\n")
+        report.write(
+            f"Camera capture rate: {camera_capture_fps:.3f} FPS "
+            "(validated V4L2 profile)\n"
+        )
         report.write(f"Camera startup delay: {args.camera_startup_delay:.3f} s\n")
         report.write(f"Camera read attempts: {args.camera_read_attempts}\n")
         report.write(f"Camera retry delay: {args.camera_retry_delay:.3f} s\n")
@@ -415,7 +421,7 @@ def main() -> None:
                 args.cam_wrist,
                 width,
                 height,
-                fps,
+                camera_capture_fps,
                 startup_delay_s=args.camera_startup_delay,
                 read_attempts=args.camera_read_attempts,
                 retry_delay_s=args.camera_retry_delay,

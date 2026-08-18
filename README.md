@@ -44,20 +44,20 @@ python scripts/preview_cameras.py
 python scripts/preview_cameras.py --no-display
 ```
 
-当前相机状态：`BLOCKED`。D405 单独 preview 恢复，但在双相机 shadow 中连续三次
-读取失败；诊断为 `main_grab=PASS, wrist_grab=FAIL`。
+当前相机状态：双相机 V4L2 测试已通过。两路相机均稳定协商为
+`640x480 @ 30 FPS`，丢弃 5 对 warmup 后有效帧均为 `10/10`，最大主机侧帧对
+偏差为 `0.004 ms`。
 
 ```text
 cam_main  = /dev/video10
-cam_wrist = /dev/video2 (BLOCKED)
+cam_wrist = /dev/video2
 D405 fallback/diagnostic node = /dev/video4
 ```
 
-D405 曾在 `/dev/video2` 和 `/dev/video4` 同时返回纯绿色无效帧。重置后单独 preview
-恢复，但双相机 shadow 仍在第 0 步前失败：主相机读取成功，D405 读取失败。因此不再
-重复 OpenCV home-staged eval；下一步必须用官方 `pyrealsense2` 按 serial 和明确的
-color/BGR8 profile 验证 D405，并最终替换不稳定的 `/dev/video*` 采集路径。代码侧的
-启动重试和 flat-frame 检查仍作为 fail-closed 防护。
+D405 曾出现纯绿色无效帧和读取超时，确认重置后恢复。进一步测试证明两台相机请求
+20 FPS 时都会退回 15 FPS，而 30 FPS profile 可以稳定运行。因此相机底层固定为
+30 FPS，policy 仍严格按 dataset metadata 以 20 Hz 读取 observation。代码继续使用
+启动 warmup、读取重试、最大帧对偏差和 flat-frame 检查作为 fail-closed 防护。
 
 `/dev/video*` 编号和可用流可能在重启或重新插拔 USB 后改变，因此每次正式 eval
 前都应重新运行 `preview_cameras.py` 检查画面。如果目标节点出现 `READ FAILED`，

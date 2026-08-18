@@ -1,1 +1,1 @@
-python scripts/check_dual_camera_stream.py --cam-main /dev/video10 --cam-wrist /dev/video2 --width 640 --height 480 --camera-fps 30 --warmup-frames 5 --frames 10 --maximum-pair-skew-ms 50
+python scripts/run_policy.py --backbone ours_rn50 --demonstrations 60 --task carrot --cam-main /dev/video10 --cam-wrist /dev/video2 --tcc-source-root /home/robotarm/TCC-core --offline --device auto --execute-home --max-steps 10

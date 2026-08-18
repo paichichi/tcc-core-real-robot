@@ -120,7 +120,7 @@ def main() -> None:
                         ("actual_fps", args.camera_fps, 0.1),
                     )
                 )
-                report.write(f"strict_dataset_profiles_match: {profiles_match}\n")
+                report.write(f"requested_profiles_match: {profiles_match}\n")
                 if args.startup_delay:
                     time.sleep(args.startup_delay)
                 for _ in range(args.warmup_frames):
