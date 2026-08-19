@@ -1,1 +1,1 @@
-python scripts/inspect_robot.py
+python scripts/robot_preflight.py
