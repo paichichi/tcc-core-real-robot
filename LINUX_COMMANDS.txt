@@ -1,1 +1,1 @@
-python scripts/robot_preflight.py
+python scripts/return_to_dataset_home.py --execute
