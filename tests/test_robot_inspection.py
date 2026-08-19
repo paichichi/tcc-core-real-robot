@@ -36,6 +36,7 @@ class FakeDriver:
         self.arm_position_calls: list[tuple[list[float], float, bool]] = []
         self.gripper_position_calls: list[tuple[float, float, bool]] = []
         self.cartesian_position_calls: list[tuple[list[float], object, float, bool, int]] = []
+        self.motor_parameter_calls: list[object] = []
         self.joint_modes = [0] * 7
         self.arm_positions = [0.0] * 6
         self.gripper_position = 0.02
@@ -45,7 +46,7 @@ class FakeDriver:
         self.configure_args = args
 
     def get_driver_version(self) -> str:
-        return "v1.9.0"
+        return "v1.9.3"
 
     def get_controller_version(self) -> str:
         return "v1.9.2"
@@ -87,6 +88,9 @@ class FakeDriver:
 
     def get_error_information(self) -> str:
         return "none"
+
+    def set_motor_parameters(self, parameters: object) -> None:
+        self.motor_parameter_calls.append(parameters)
 
     def set_all_modes(self, mode: object) -> None:
         self.mode_calls.append(mode)
@@ -153,6 +157,7 @@ def make_api(driver: FakeDriver) -> SimpleNamespace:
     return SimpleNamespace(
         Model=SimpleNamespace(wxai_v0="model"),
         StandardEndEffector=SimpleNamespace(wxai_v0_follower="end-effector"),
+        StandardMotorParameters=SimpleNamespace(wxai_v0_20250509="motor-parameters"),
         Mode=SimpleNamespace(position="position", idle="idle"),
         InterpolationSpace=SimpleNamespace(cartesian="cartesian"),
         TrossenArmDriver=lambda: driver,
@@ -164,9 +169,10 @@ def make_config() -> dict[str, object]:
         "robot": {
             "driver_model": "wxai_v0",
             "end_effector": "wxai_v0_follower",
+            "motor_parameters": "wxai_v0_20250509",
             "controller_ip": "192.168.1.2",
-            "expected_driver_series": "1.9",
-            "expected_firmware_series": "1.9",
+            "expected_driver_version": "1.9.3",
+            "expected_firmware_version": "1.9.2",
             "home_name": "dataset_collection_home",
             "home_source": "test_fixture",
             "home_arm_positions_rad": [0.1] * 6,

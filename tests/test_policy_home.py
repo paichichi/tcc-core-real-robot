@@ -12,6 +12,8 @@ class FakeHomeDriver:
         self.gripper = 0.02
         self.arm_commands: list[tuple[list[float], float, bool]] = []
         self.gripper_commands: list[tuple[float, float, bool]] = []
+        self.all_commands: list[tuple[list[float], float, bool]] = []
+        self.motor_parameter_calls: list[object] = []
         self.cleaned = False
 
     def configure(self, *args: object) -> None:
@@ -25,6 +27,9 @@ class FakeHomeDriver:
 
     def get_error_information(self) -> str:
         return "No error"
+
+    def set_motor_parameters(self, parameters: object) -> None:
+        self.motor_parameter_calls.append(parameters)
 
     def get_modes(self) -> list[SimpleNamespace]:
         return [SimpleNamespace(value=value) for value in self.modes]
@@ -51,6 +56,13 @@ class FakeHomeDriver:
     ) -> None:
         self.gripper_commands.append((target, goal_time, blocking))
         self.gripper = target
+
+    def set_all_positions(
+        self, target: list[float], goal_time: float, blocking: bool
+    ) -> None:
+        self.all_commands.append((target.copy(), goal_time, blocking))
+        self.arm = target[:6].copy()
+        self.gripper = target[6]
 
     def get_all_positions(self) -> list[float]:
         return self.arm + [self.gripper]
@@ -84,6 +96,7 @@ def make_api(driver: FakeHomeDriver) -> SimpleNamespace:
     return SimpleNamespace(
         Model=SimpleNamespace(wxai_v0="model"),
         StandardEndEffector=SimpleNamespace(wxai_v0_follower="end-effector"),
+        StandardMotorParameters=SimpleNamespace(wxai_v0_20250509="motor-parameters"),
         Mode=SimpleNamespace(position="position", idle="idle"),
         InterpolationSpace=SimpleNamespace(cartesian="cartesian"),
         TrossenArmDriver=lambda: driver,
@@ -95,9 +108,10 @@ def make_config() -> dict:
         "robot": {
             "driver_model": "wxai_v0",
             "end_effector": "wxai_v0_follower",
+            "motor_parameters": "wxai_v0_20250509",
             "controller_ip": "192.168.1.4",
-            "expected_driver_series": "1.9",
-            "expected_firmware_series": "1.9",
+            "expected_driver_version": "1.9.3",
+            "expected_firmware_version": "1.9.2",
             "home_arm_positions_rad": [0.0, 1.0, 0.5, 0.6, 0.0, 0.0],
             "home_gripper_position_m": 0.0,
         },
@@ -111,9 +125,9 @@ def make_config() -> dict:
                 "max_action_delta": [0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.001],
                 "max_cumulative_joint_delta_rad": 0.06,
                 "max_cumulative_gripper_delta_m": 0.003,
-                "goal_time_s": 1.0,
-                "max_arm_tracking_error_rad": 0.02,
-                "max_gripper_tracking_error_m": 0.001,
+                "control_fps": 20.0,
+                "min_time_to_move_multiplier": 6.0,
+                "max_tracking_error": [0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.001],
             },
         },
     }
@@ -130,6 +144,7 @@ def test_prepare_home_holds_then_restores_idle() -> None:
     assert driver.modes == [1] * 7
     assert driver.arm_commands[0][1:] == (10.0, True)
     assert driver.gripper_commands == [(0.0, 2.0, True)]
+    assert driver.motor_parameter_calls == ["motor-parameters"]
 
     session.close()
     assert driver.modes == [0] * 7
@@ -163,6 +178,7 @@ def test_execute_bounded_policy_step_clips_then_tracks() -> None:
     assert result.max_commanded_arm_delta_rad == pytest.approx(0.02)
     assert result.commanded_gripper_delta_m == pytest.approx(0.001)
     assert result.observed == pytest.approx(result.commanded)
+    assert driver.all_commands[-1][1:] == pytest.approx((0.3, True))
     session.close()
 
 

@@ -661,12 +661,12 @@ def main() -> None:
                         and max(
                             item.max_arm_tracking_error_rad for item in bounded_steps
                         )
-                        <= float(clipped["max_arm_tracking_error_rad"]),
+                        <= max(float(value) for value in clipped["max_tracking_error"][:6]),
                         "clipped_gripper_tracking_safe": bool(bounded_steps)
                         and max(
                             item.gripper_tracking_error_m for item in bounded_steps
                         )
-                        <= float(clipped["max_gripper_tracking_error_m"]),
+                        <= float(clipped["max_tracking_error"][6]),
                     }
                 )
             if failure:

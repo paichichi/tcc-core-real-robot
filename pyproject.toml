@@ -19,7 +19,7 @@ dev = [
   "ruff>=0.9",
 ]
 robot = [
-  "trossen-arm>=1.9,<1.10",
+  "trossen-arm==1.9.3",
 ]
 train = [
   "av>=13.1",

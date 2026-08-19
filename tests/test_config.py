@@ -11,20 +11,34 @@ def test_initial_revision_disables_actuation() -> None:
     assert config["safety"]["dry_run_by_default"] is True
     assert config["safety"]["require_emergency_stop_ready"] is True
     assert config["robot"]["home_gripper_position_m"] == 0.0
+    assert config["robot"]["motor_parameters"] == "wxai_v0_20250509"
+    assert config["robot"]["expected_driver_version"] == "1.9.3"
+    assert config["robot"]["expected_firmware_version"] == "1.9.2"
     assert config["policy_evaluation"]["inference_warmup_steps"] >= 1
     assert config["policy_evaluation"]["minimum_observed_rate_hz"] == 18.0
     assert config["policy_evaluation"]["camera_capture_fps"] == 30.0
     clipped = config["policy_evaluation"]["clipped_rollout"]
-    assert clipped["max_steps"] == 359
+    assert clipped["max_steps"] == 10
     assert clipped["max_action_delta"] == [
-        0.0461585,
-        0.0606546,
-        0.0850689,
-        0.132372,
-        0.0644694,
-        0.0854505,
-        0.0044294,
+        0.02,
+        0.02,
+        0.02,
+        0.02,
+        0.02,
+        0.02,
+        0.001,
     ]
+    assert clipped["max_tracking_error"] == [
+        0.02,
+        0.02,
+        0.02,
+        0.02,
+        0.02,
+        0.02,
+        0.001,
+    ]
+    assert clipped["control_fps"] == 20.0
+    assert clipped["min_time_to_move_multiplier"] == 6.0
     assert "max_cumulative_joint_delta_rad" not in clipped
     assert "max_cumulative_gripper_delta_m" not in clipped
     carrot_limits = clipped["dataset_action_limits"]["pick_and_place_carrot_100"]

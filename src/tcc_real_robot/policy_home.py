@@ -6,12 +6,7 @@ from dataclasses import dataclass
 from math import isfinite
 from typing import Any, Self
 
-
-def _version_series(version: str) -> str:
-    parts = version.removeprefix("v").split(".")
-    if len(parts) < 2 or not all(part.isdigit() for part in parts[:2]):
-        raise RuntimeError(f"Unrecognized Trossen version: {version!r}")
-    return ".".join(parts[:2])
+from tcc_real_robot.driver_config import apply_motor_parameters, validate_versions
 
 
 @dataclass(frozen=True)
@@ -83,14 +78,8 @@ class PolicyHomeSession:
                 self.timeout,
             )
             self.configured = True
-            driver_version = str(self.driver.get_driver_version())
-            firmware_version = str(self.driver.get_controller_version())
-            if _version_series(driver_version) != str(robot["expected_driver_series"]):
-                raise RuntimeError(f"Unexpected driver version {driver_version}")
-            if _version_series(firmware_version) != str(
-                robot["expected_firmware_series"]
-            ):
-                raise RuntimeError(f"Unexpected firmware version {firmware_version}")
+            driver_version, firmware_version = validate_versions(self.driver, robot)
+            apply_motor_parameters(self.driver_api, self.driver, robot)
             error_before = str(self.driver.get_error_information())
             if error_before.lower() != "no error":
                 raise RuntimeError(f"Controller reports an error: {error_before}")
@@ -233,12 +222,19 @@ class PolicyHomeSession:
         max_cumulative_gripper_delta = float(
             settings.get("max_cumulative_gripper_delta_m", float("inf"))
         )
-        goal_time = float(settings["goal_time_s"])
-        max_arm_tracking_error = float(settings["max_arm_tracking_error_rad"])
-        max_gripper_tracking_error = float(settings["max_gripper_tracking_error_m"])
+        control_fps = float(settings["control_fps"])
+        min_time_to_move_multiplier = float(
+            settings["min_time_to_move_multiplier"]
+        )
+        goal_time = min_time_to_move_multiplier / control_fps
+        max_tracking_error = [
+            float(value) for value in settings["max_tracking_error"]
+        ]
         if (
             len(max_action_delta) != 7
             or any(value <= 0 for value in max_action_delta)
+            or len(max_tracking_error) != 7
+            or any(value <= 0 for value in max_tracking_error)
             or (
                 not use_absolute_limits
                 and max_cumulative_arm_delta < min(max_action_delta[:6])
@@ -247,7 +243,9 @@ class PolicyHomeSession:
                 not use_absolute_limits
                 and max_cumulative_gripper_delta < max_action_delta[6]
             )
-            or goal_time <= 0
+            or control_fps <= 0
+            or min_time_to_move_multiplier <= 0
+            or goal_time <= 0.2
         ):
             raise ValueError("Clipped single-step limits and goal time are invalid")
 
@@ -277,23 +275,29 @@ class PolicyHomeSession:
             bounded = min(float(limit.position_max), bounded)
             commanded.append(bounded)
 
-        self.driver.set_arm_positions(commanded[:6], goal_time, True)
-        self.driver.set_gripper_position(commanded[6], goal_time, True)
+        self.driver.set_all_positions(commanded, goal_time, True)
         observed = self.read_positions()
-        arm_tracking_error = max(
+        arm_tracking_errors = [
             abs(actual - target)
             for actual, target in zip(observed[:6], commanded[:6], strict=True)
-        )
+        ]
+        arm_tracking_error = max(arm_tracking_errors)
         gripper_tracking_error = abs(observed[6] - commanded[6])
-        if arm_tracking_error > max_arm_tracking_error:
+        violations = [
+            (index, error, max_tracking_error[index])
+            for index, error in enumerate(arm_tracking_errors)
+            if error > max_tracking_error[index]
+        ]
+        if violations:
+            index, error, limit = violations[0]
             raise RuntimeError(
-                f"Single-step arm tracking error {arm_tracking_error:.6f} rad "
-                "exceeds limit"
+                f"Joint {index} tracking error {error:.6f} rad exceeds "
+                f"dataset limit {limit:.6f} rad"
             )
-        if gripper_tracking_error > max_gripper_tracking_error:
+        if gripper_tracking_error > max_tracking_error[6]:
             raise RuntimeError(
                 f"Single-step gripper tracking error {gripper_tracking_error:.6f} m "
-                "exceeds limit"
+                f"exceeds dataset limit {max_tracking_error[6]:.6f} m"
             )
         error_after = str(self.driver.get_error_information())
         if error_after.lower() != "no error":

@@ -7,31 +7,7 @@ from collections.abc import Callable
 from math import isfinite
 from typing import Any
 
-
-def _version_series(version: str) -> str:
-    """Return the major.minor portion of a version such as ``v1.9.2``."""
-    parts = version.removeprefix("v").split(".")
-    if len(parts) < 2 or not all(part.isdigit() for part in parts[:2]):
-        raise RuntimeError(f"Unrecognized Trossen version: {version!r}")
-    return ".".join(parts[:2])
-
-
-def _validate_versions(driver: Any, robot: dict[str, Any]) -> tuple[str, str]:
-    driver_version = str(driver.get_driver_version())
-    firmware_version = str(driver.get_controller_version())
-    expected_driver = str(robot["expected_driver_series"])
-    expected_firmware = str(robot["expected_firmware_series"])
-
-    if _version_series(driver_version) != expected_driver:
-        raise RuntimeError(
-            f"Driver {driver_version} does not match expected {expected_driver}.x"
-        )
-    if _version_series(firmware_version) != expected_firmware:
-        raise RuntimeError(
-            f"Firmware {firmware_version} does not match expected "
-            f"{expected_firmware}.x"
-        )
-    return driver_version, firmware_version
+from tcc_real_robot.driver_config import apply_motor_parameters, validate_versions
 
 
 def inspect_robot(driver_api: Any, config: dict[str, Any], timeout: float) -> dict[str, Any]:
@@ -54,7 +30,7 @@ def inspect_robot(driver_api: Any, config: dict[str, Any], timeout: float) -> di
         )
         configured = True
 
-        driver_version, firmware_version = _validate_versions(driver, robot)
+        driver_version, firmware_version = validate_versions(driver, robot)
 
         modes = [getattr(mode, "value", str(mode)) for mode in driver.get_modes()]
         return {
@@ -102,7 +78,7 @@ def monitor_robot(
             timeout,
         )
         configured = True
-        driver_version, firmware_version = _validate_versions(driver, robot)
+        driver_version, firmware_version = validate_versions(driver, robot)
         started = time.monotonic()
 
         for index in range(sample_count):
@@ -167,7 +143,7 @@ def preflight_robot(
             timeout,
         )
         configured = True
-        driver_version, firmware_version = _validate_versions(driver, robot)
+        driver_version, firmware_version = validate_versions(driver, robot)
 
         modes = [getattr(mode, "value", str(mode)) for mode in driver.get_modes()]
         positions = [float(value) for value in driver.get_all_positions()]
@@ -270,7 +246,8 @@ def run_position_hold_test(
             timeout,
         )
         configured = True
-        driver_version, firmware_version = _validate_versions(driver, robot)
+        driver_version, firmware_version = validate_versions(driver, robot)
+        apply_motor_parameters(driver_api, driver, robot)
         error_information = str(driver.get_error_information())
         modes_before = [
             getattr(mode, "value", str(mode)) for mode in driver.get_modes()
@@ -405,7 +382,8 @@ def run_current_position_hold_test(
             timeout,
         )
         configured = True
-        driver_version, firmware_version = _validate_versions(driver, robot)
+        driver_version, firmware_version = validate_versions(driver, robot)
+        apply_motor_parameters(driver_api, driver, robot)
         error_information = str(driver.get_error_information())
         modes_before = [
             getattr(mode, "value", str(mode)) for mode in driver.get_modes()
@@ -566,7 +544,8 @@ def run_gripper_cycle_test(
             timeout,
         )
         configured = True
-        driver_version, firmware_version = _validate_versions(driver, robot)
+        driver_version, firmware_version = validate_versions(driver, robot)
+        apply_motor_parameters(driver_api, driver, robot)
         error_before = str(driver.get_error_information())
         modes_before = [
             getattr(mode, "value", str(mode)) for mode in driver.get_modes()
@@ -751,7 +730,8 @@ def run_whole_arm_cycle_test(
             timeout,
         )
         configured = True
-        driver_version, firmware_version = _validate_versions(driver, robot)
+        driver_version, firmware_version = validate_versions(driver, robot)
+        apply_motor_parameters(driver_api, driver, robot)
         error_before = str(driver.get_error_information())
         modes_before = [
             getattr(mode, "value", str(mode)) for mode in driver.get_modes()
@@ -956,7 +936,8 @@ def run_folded_pose_return(
             timeout,
         )
         configured = True
-        driver_version, firmware_version = _validate_versions(driver, robot)
+        driver_version, firmware_version = validate_versions(driver, robot)
+        apply_motor_parameters(driver_api, driver, robot)
         error_before = str(driver.get_error_information())
         modes_before = [
             getattr(mode, "value", str(mode)) for mode in driver.get_modes()
@@ -1136,7 +1117,8 @@ def run_cartesian_step_test(
             timeout,
         )
         configured = True
-        driver_version, firmware_version = _validate_versions(driver, robot)
+        driver_version, firmware_version = validate_versions(driver, robot)
+        apply_motor_parameters(driver_api, driver, robot)
         error_before = str(driver.get_error_information())
         modes_before = [
             getattr(mode, "value", str(mode)) for mode in driver.get_modes()
