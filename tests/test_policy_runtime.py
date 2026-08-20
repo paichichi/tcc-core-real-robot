@@ -138,6 +138,30 @@ def test_future_delta_policy_reconstructs_absolute_target(tmp_path: Path) -> Non
     assert torch.allclose(action, torch.from_numpy(state) + 0.01)
 
 
+def test_future_delta_policy_accepts_runtime_gain_override(tmp_path: Path) -> None:
+    checkpoint = tmp_path / "future_delta.pt"
+    torch.save(future_delta_checkpoint_payload(), checkpoint)
+    bundle = load_policy_bundle(
+        checkpoint, expected_feature_dim=3, device=torch.device("cpu")
+    )
+    frame = np.zeros((48, 64, 3), dtype=np.uint8)
+    state = np.arange(7, dtype=np.float32)
+
+    action = predict_action(
+        MeanBackbone().eval(),
+        bundle,
+        frame,
+        frame,
+        task_index=0,
+        image_size=32,
+        device=torch.device("cpu"),
+        observation_state=state,
+        execution_delta_gain_override=0.6,
+    )
+
+    assert torch.allclose(action, torch.from_numpy(state) + 0.06)
+
+
 def test_future_delta_policy_requires_state(tmp_path: Path) -> None:
     checkpoint = tmp_path / "future_delta.pt"
     torch.save(future_delta_checkpoint_payload(), checkpoint)

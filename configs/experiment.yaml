@@ -57,8 +57,10 @@ policy:
   action_chunk_size: 1
   action_representation: future_delta
   lookahead_frames: 10
-  # Convert the 10-frame (0.5 s) prediction into one 20 Hz control step.
-  execution_delta_gain: 0.1
+  # The model predicts 0.5 s ahead. The official non-blocking driver command
+  # interpolates for 0.3 s, so target the matching 0.3 / 0.5 fraction. Every
+  # emitted command is still clipped to replay-measured per-frame limits.
+  execution_delta_gain: 0.6
   hidden_dimensions: [256, 256]
   activation: relu
   input_batch_norm: false

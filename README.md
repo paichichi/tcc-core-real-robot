@@ -24,9 +24,11 @@ python scripts/train_policy.py --cache-root runs/feature_cache/ours_rn50 --outpu
 前者兼容现有 Hugging Face 路径。`checkpoint_last.pt` 是第 50,000 步权重，
 `metrics.json` 记录训练曲线、最优 validation 指标和只评估一次的 test 指标。
 
-10 帧 future delta 对应数据集 20 Hz 下的 0.5 秒目标。执行时使用 `0.1` gain
-转换成一个 20 Hz 控制步，随后仍经过现有 driver 的逐步、累计、关节和 workspace
-限制。逐关节单步上限取自成功执行的 episode 33 replay 实测最大值，而不是统一的
+10 帧 future delta 对应数据集 20 Hz 下的 0.5 秒目标。官方 driver 使用 `0.3 s`
+非阻塞插值，因此执行时使用 `0.3 / 0.5 = 0.6` gain，使预测目标和 controller
+时间尺度一致；实时 runner 会显式覆盖旧 HF checkpoint 中保存的 `0.1`。指令随后
+仍经过现有 driver 的逐步、累计、关节和 workspace 限制。逐关节单步上限取自
+成功执行的 episode 33 replay 实测最大值，而不是统一的
 `0.02 rad`；因此 policy 控制路径允许复现 replay 的运动时间尺度，同时运行时仍限制
 机械臂速度不超过 `1.5 rad/s`、夹爪速度不超过 `0.06 m/s`。
 

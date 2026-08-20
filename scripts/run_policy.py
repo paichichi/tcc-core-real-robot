@@ -409,6 +409,24 @@ def main() -> None:
         expected_feature_dim=int(backbone_metadata["feature_dim"]),
         device=device,
     )
+    checkpoint_policy_config = bundle.config["policy"]
+    action_representation = checkpoint_policy_config.get(
+        "action_representation", "absolute"
+    )
+    runtime_execution_delta_gain: float | None = None
+    if action_representation == "future_delta":
+        checkpoint_lookahead = int(checkpoint_policy_config["lookahead_frames"])
+        configured_lookahead = int(config["policy"]["lookahead_frames"])
+        if checkpoint_lookahead != configured_lookahead:
+            raise RuntimeError(
+                "Checkpoint/config lookahead mismatch: "
+                f"{checkpoint_lookahead} != {configured_lookahead}"
+            )
+        runtime_execution_delta_gain = float(
+            config["policy"]["execution_delta_gain"]
+        )
+        if not 0.0 < runtime_execution_delta_gain <= 1.0:
+            raise ValueError("Runtime execution_delta_gain must be in (0, 1]")
     policy_uses_proprioception = bundle.model.proprio_dim > 0
     if policy_uses_proprioception and not args.execute_home:
         raise RuntimeError(
@@ -483,8 +501,17 @@ def main() -> None:
         )
         report.write(
             "Policy action representation: "
-            f"{bundle.config['policy'].get('action_representation', 'absolute')}\n"
+            f"{action_representation}\n"
         )
+        if runtime_execution_delta_gain is not None:
+            report.write(
+                "Checkpoint future-delta gain: "
+                f"{float(checkpoint_policy_config.get('execution_delta_gain', 0.0)):.6f}\n"
+            )
+            report.write(
+                "Runtime future-delta gain: "
+                f"{runtime_execution_delta_gain:.6f}\n"
+            )
         report.write(f"Hub repository: {assets.repository}\n")
         report.write(f"Hub revision: {assets.revision}\n")
         report.write(f"Backbone SHA256: {assets.backbone_sha256}\n")
@@ -650,6 +677,7 @@ def main() -> None:
                         int(backbone_metadata["image_size"]),
                         device,
                         observation_state=warm_state,
+                        execution_delta_gain_override=runtime_execution_delta_gain,
                     )
                 if home_session is not None:
                     home_reference = home_session.read_positions()
@@ -693,6 +721,7 @@ def main() -> None:
                         int(backbone_metadata["image_size"]),
                         device,
                         observation_state=policy_state,
+                        execution_delta_gain_override=runtime_execution_delta_gain,
                     )
                     policy_latencies_ms.append(
                         (time.monotonic() - policy_started) * 1000.0

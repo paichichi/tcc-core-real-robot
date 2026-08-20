@@ -176,6 +176,7 @@ def predict_action(
     image_size: int,
     device: torch.device,
     observation_state: list[float] | np.ndarray | torch.Tensor | None = None,
+    execution_delta_gain_override: float | None = None,
 ) -> torch.Tensor:
     """Predict one denormalized 7-D absolute action on CPU."""
     number_of_tasks = int(bundle.config["policy"]["number_of_tasks"])
@@ -218,9 +219,17 @@ def predict_action(
             if proprioception is None:
                 raise RuntimeError("future_delta policy has no proprioception")
             lookahead_frames = int(policy_config.get("lookahead_frames", 1))
-            gain = float(
-                policy_config.get("execution_delta_gain", 1.0 / lookahead_frames)
+            gain = (
+                float(execution_delta_gain_override)
+                if execution_delta_gain_override is not None
+                else float(
+                    policy_config.get(
+                        "execution_delta_gain", 1.0 / lookahead_frames
+                    )
+                )
             )
+            if not 0.0 < gain <= 1.0:
+                raise ValueError("execution_delta_gain must be in (0, 1]")
             action = proprioception + gain * action
     result = action[0].float().cpu()
     if result.shape != (7,) or not torch.isfinite(result).all():

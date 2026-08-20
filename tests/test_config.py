@@ -86,7 +86,7 @@ def test_future_delta_policy_configuration() -> None:
     assert policy["proprioception_dim"] == 7
     assert policy["action_representation"] == "future_delta"
     assert policy["lookahead_frames"] == 10
-    assert policy["execution_delta_gain"] == 0.1
+    assert policy["execution_delta_gain"] == 0.6
     assert policy["input_batch_norm"] is False
     assert policy["input_layer_norm"] is True
     assert policy["loss"] == "smooth_l1"
