@@ -1,1 +1,1 @@
-python scripts/run_policy.py --backbone ours_rn50 --demonstrations 80 --execute-home --max-steps 120
+python scripts/run_policy.py --execute-policy --emergency-stop-ready --max-steps 120
