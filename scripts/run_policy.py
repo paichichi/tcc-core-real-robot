@@ -896,11 +896,24 @@ def main() -> None:
             report.write(f"Camera pair skew maximum: {pair_skew_max:.3f} ms\n")
             if first_arm_delta is not None:
                 report.write(
-                    f"First action maximum arm delta: {first_arm_delta:.7f} rad\n"
+                    f"First raw-policy action maximum arm delta: "
+                    f"{first_arm_delta:.7f} rad\n"
                 )
             if first_gripper_delta is not None:
                 report.write(
-                    f"First action gripper delta: {first_gripper_delta:.7f} m\n"
+                    f"First raw-policy action gripper delta: "
+                    f"{first_gripper_delta:.7f} m\n"
+                )
+            if bounded_steps:
+                report.write(
+                    "Maximum commanded arm lead: "
+                    f"{max(item.max_arm_command_lead_rad for item in bounded_steps):.7f} "
+                    "rad\n"
+                )
+                report.write(
+                    "Maximum commanded gripper lead: "
+                    f"{max(item.gripper_command_lead_m for item in bounded_steps):.7f} "
+                    "m\n"
                 )
             report.write("Checks:\n")
             for name, passed in checks.items():
