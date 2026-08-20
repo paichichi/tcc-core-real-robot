@@ -1,1 +1,1 @@
-python scripts/probe_camera_serials.py --main-serial 838212073584 --wrist-serial 242623072067
+python scripts/inspect_realsense_sdk.py
