@@ -1,4 +1,4 @@
-"""Small frozen-feature behavior-cloning policy used for the first baseline."""
+"""Small frozen-feature behavior-cloning policies for real-robot baselines."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ class ActionNormalizer(nn.Module):
 
 
 class TCCMLPPolicy(nn.Module):
-    """Predict one action from two frozen TCC camera features and a task ID."""
+    """Predict one action from two frozen features, task ID, and optional state."""
 
     def __init__(
         self,
@@ -37,12 +37,15 @@ class TCCMLPPolicy(nn.Module):
         hidden_dims: Sequence[int] = (256, 256),
         proprio_dim: int = 0,
         input_batch_norm: bool = True,
+        input_layer_norm: bool = False,
     ) -> None:
         super().__init__()
         if feature_dim < 1 or num_tasks < 1 or action_dim < 1:
             raise ValueError("Feature, task, and action dimensions must be positive")
         if not hidden_dims or any(width < 1 for width in hidden_dims):
             raise ValueError("At least one positive hidden dimension is required")
+        if input_batch_norm and input_layer_norm:
+            raise ValueError("Choose at most one input normalization layer")
 
         self.feature_dim = feature_dim
         self.num_tasks = num_tasks
@@ -53,6 +56,8 @@ class TCCMLPPolicy(nn.Module):
         layers: list[nn.Module] = []
         if input_batch_norm:
             layers.append(nn.BatchNorm1d(input_dim))
+        elif input_layer_norm:
+            layers.append(nn.LayerNorm(input_dim))
         previous = input_dim
         for width in hidden_dims:
             layers.extend((nn.Linear(previous, width), nn.ReLU()))

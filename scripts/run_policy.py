@@ -18,9 +18,8 @@ from tcc_real_robot.model_assets import resolve_model_assets
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Evaluate a pinned backbone-policy pair from two RGB cameras. "
-            "Policy predictions remain shadow-only; an explicit option can "
-            "move the robot to dataset home before evaluation."
+            "Evaluate a pinned backbone-policy pair from two RGB cameras with "
+            "shadow mode or explicitly gated, bounded real-robot rollout."
         )
     )
     parser.add_argument("--config", type=Path, default=Path("configs/experiment.yaml"))
@@ -396,6 +395,12 @@ def main() -> None:
         expected_feature_dim=int(backbone_metadata["feature_dim"]),
         device=device,
     )
+    policy_uses_proprioception = bundle.model.proprio_dim > 0
+    if policy_uses_proprioception and not args.execute_home:
+        raise RuntimeError(
+            "This policy requires robot state; run with --execute-home or "
+            "--execute-policy"
+        )
     trained_tasks = [str(value) for value in bundle.config["dataset"]["tasks"]]
     if trained_tasks != task_names:
         raise RuntimeError(
@@ -453,6 +458,14 @@ def main() -> None:
         report.write(f"Backbone: {args.backbone}\n")
         report.write(f"Demonstrations: {args.demonstrations}\n")
         report.write(f"Training step: {bundle.step}\n")
+        report.write(
+            "Policy proprioception: "
+            f"{'ENABLED' if policy_uses_proprioception else 'DISABLED'}\n"
+        )
+        report.write(
+            "Policy action representation: "
+            f"{bundle.config['policy'].get('action_representation', 'absolute')}\n"
+        )
         report.write(f"Hub repository: {assets.repository}\n")
         report.write(f"Hub revision: {assets.revision}\n")
         report.write(f"Backbone SHA256: {assets.backbone_sha256}\n")
@@ -596,6 +609,11 @@ def main() -> None:
                     cameras.read_rgb_pair()
                 for _ in range(inference_warmup_steps):
                     warm_main, warm_wrist = cameras.read_rgb_pair()
+                    warm_state = (
+                        home_session.read_positions()
+                        if policy_uses_proprioception and home_session is not None
+                        else None
+                    )
                     predict_action(
                         backbone,
                         bundle,
@@ -604,6 +622,7 @@ def main() -> None:
                         task_index,
                         int(backbone_metadata["image_size"]),
                         device,
+                        observation_state=warm_state,
                     )
                 if home_session is not None:
                     home_reference = home_session.read_positions()
@@ -626,6 +645,11 @@ def main() -> None:
                         raise RuntimeError(
                             f"cam_wrist shape {wrist_rgb.shape} != {expected_resolution}"
                         )
+                    policy_state = (
+                        home_session.read_positions()
+                        if policy_uses_proprioception and home_session is not None
+                        else None
+                    )
                     action = predict_action(
                         backbone,
                         bundle,
@@ -634,6 +658,7 @@ def main() -> None:
                         task_index,
                         int(backbone_metadata["image_size"]),
                         device,
+                        observation_state=policy_state,
                     )
                     completed += 1
                     elapsed = time.monotonic() - rollout_started

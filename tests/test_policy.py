@@ -30,3 +30,22 @@ def test_action_normalizer_round_trip() -> None:
     normalizer = ActionNormalizer(torch.tensor([1.0, 2.0]), torch.tensor([2.0, 4.0]))
     action = torch.tensor([[3.0, 6.0]])
     assert torch.allclose(normalizer.denormalize(normalizer.normalize(action)), action)
+
+
+def test_future_delta_policy_accepts_normalized_state_and_layer_norm() -> None:
+    policy = TCCMLPPolicy(
+        feature_dim=8,
+        num_tasks=4,
+        proprio_dim=7,
+        input_batch_norm=False,
+        input_layer_norm=True,
+    )
+
+    output = policy(
+        torch.randn(3, 8),
+        torch.randn(3, 8),
+        torch.tensor([0, 1, 2]),
+        torch.randn(3, 7),
+    )
+
+    assert output.shape == (3, 7)

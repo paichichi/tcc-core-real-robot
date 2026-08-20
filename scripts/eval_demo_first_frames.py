@@ -147,6 +147,7 @@ def main() -> None:
                 task_index,
                 int(backbone_metadata["image_size"]),
                 device,
+                observation_state=state,
             )
             .numpy()
             .astype(np.float64)

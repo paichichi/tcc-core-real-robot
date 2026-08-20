@@ -123,12 +123,16 @@ def main() -> None:
         ):
             raise ValueError("--train-episodes-per-task is outside the dataset")
         split["train_episodes_per_task"] = args.train_episodes_per_task
-        split["validation_episodes_per_task"] = 0
-        split["test_episodes_per_task"] = 0
         split["unused_episodes_per_task"] = (
             int(config["dataset"]["demonstrations_per_task"])
             - args.train_episodes_per_task
+            - int(split["validation_episodes_per_task"])
+            - int(split["test_episodes_per_task"])
         )
+        if split["unused_episodes_per_task"] < 0:
+            raise ValueError(
+                "Requested train/validation/test episodes exceed the dataset"
+            )
     records = build_episode_records(
         dataset_root=dataset_root,
         task_names=list(config["dataset"]["tasks"]),

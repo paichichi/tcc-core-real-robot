@@ -72,17 +72,24 @@ def test_dataset_scope_is_four_tasks() -> None:
     assert len(config["dataset"]["tasks"]) == 4
 
 
-def test_first_policy_is_single_step_offline_bc() -> None:
+def test_future_delta_policy_configuration() -> None:
     config = load_yaml(ROOT / "configs" / "experiment.yaml")
     policy = config["policy"]
-    assert policy["implementation"] == "tcc_mlp_bc_v0"
+    assert policy["implementation"] == "tcc_mlp_bc_v1_future_delta"
     assert policy["hidden_dimensions"] == [256, 256]
     assert policy["action_chunk_size"] == 1
-    assert policy["proprioception"] is False
+    assert policy["proprioception"] is True
+    assert policy["proprioception_dim"] == 7
+    assert policy["action_representation"] == "future_delta"
+    assert policy["lookahead_frames"] == 10
+    assert policy["execution_delta_gain"] == 0.1
+    assert policy["input_batch_norm"] is False
+    assert policy["input_layer_norm"] is True
+    assert policy["loss"] == "smooth_l1"
     assert config["evaluation"]["max_rollout_steps"] == 359
-    assert config["split"]["train_episodes_per_task"] == 60
-    assert config["split"]["validation_episodes_per_task"] == 0
-    assert config["split"]["test_episodes_per_task"] == 0
+    assert config["split"]["train_episodes_per_task"] == 80
+    assert config["split"]["validation_episodes_per_task"] == 10
+    assert config["split"]["test_episodes_per_task"] == 10
     assert "horizon" not in policy
 
 

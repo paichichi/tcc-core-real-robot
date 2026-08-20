@@ -23,6 +23,7 @@ class PolicyBundle:
 
     model: TCCMLPPolicy
     normalizer: ActionNormalizer
+    state_normalizer: ActionNormalizer | None
     config: dict[str, Any]
     step: int
 
@@ -85,17 +86,31 @@ def load_policy_bundle(
     if not isinstance(config, dict) or not isinstance(config.get("policy"), dict):
         raise TypeError("Policy checkpoint contains an invalid config")
     policy_config = config["policy"]
-    if policy_config.get("proprioception") is not False:
-        raise ValueError("This runner only supports the no-proprioception v0 policy")
     if int(policy_config.get("action_chunk_size", -1)) != 1:
         raise ValueError("This runner requires a single-step policy checkpoint")
+    uses_proprioception = policy_config.get("proprioception") is True
+    action_representation = policy_config.get("action_representation", "absolute")
+    if action_representation not in {"absolute", "future_delta"}:
+        raise ValueError(f"Unsupported action representation: {action_representation}")
+    if action_representation == "future_delta" and not uses_proprioception:
+        raise ValueError("future_delta checkpoints require proprioception")
+    if action_representation == "future_delta":
+        lookahead_frames = int(policy_config.get("lookahead_frames", 1))
+        default_gain = 1.0 / lookahead_frames
+        execution_delta_gain = float(
+            policy_config.get("execution_delta_gain", default_gain)
+        )
+        if not 0.0 < execution_delta_gain <= 1.0:
+            raise ValueError("execution_delta_gain must be in (0, 1]")
+    proprio_dim = int(policy_config.get("proprioception_dim", 7)) if uses_proprioception else 0
     model = TCCMLPPolicy(
         feature_dim=feature_dim,
         num_tasks=int(policy_config["number_of_tasks"]),
         action_dim=int(policy_config["action_dim"]),
         hidden_dims=tuple(policy_config["hidden_dimensions"]),
-        proprio_dim=0,
+        proprio_dim=proprio_dim,
         input_batch_norm=bool(policy_config["input_batch_norm"]),
+        input_layer_norm=bool(policy_config.get("input_layer_norm", False)),
     )
     model.load_state_dict(checkpoint["model"], strict=True)
     model.eval().to(device)
@@ -107,9 +122,22 @@ def load_policy_bundle(
         .eval()
         .to(device)
     )
+    state_normalizer: ActionNormalizer | None = None
+    if uses_proprioception:
+        if "state_mean" not in checkpoint or "state_std" not in checkpoint:
+            raise ValueError("Proprioceptive checkpoint lacks state normalization")
+        state_normalizer = (
+            ActionNormalizer(
+                torch.as_tensor(checkpoint["state_mean"]),
+                torch.as_tensor(checkpoint["state_std"]),
+            )
+            .eval()
+            .to(device)
+        )
     return PolicyBundle(
         model=model,
         normalizer=normalizer,
+        state_normalizer=state_normalizer,
         config=config,
         step=int(checkpoint.get("step", 0)),
     )
@@ -124,6 +152,7 @@ def predict_action(
     task_index: int,
     image_size: int,
     device: torch.device,
+    observation_state: list[float] | np.ndarray | torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Predict one denormalized 7-D absolute action on CPU."""
     number_of_tasks = int(bundle.config["policy"]["number_of_tasks"])
@@ -138,12 +167,38 @@ def predict_action(
         enabled=device.type == "cuda",
     ):
         features = backbone(images).float()
+        proprioception: torch.Tensor | None = None
+        if bundle.model.proprio_dim:
+            if observation_state is None or bundle.state_normalizer is None:
+                raise ValueError("This policy checkpoint requires observation_state")
+            proprioception = torch.as_tensor(
+                observation_state, dtype=torch.float32, device=device
+            ).reshape(1, -1)
+            if proprioception.shape != (1, bundle.model.proprio_dim):
+                raise ValueError(
+                    f"Expected proprioception shape [1, {bundle.model.proprio_dim}]"
+                )
+            if not torch.isfinite(proprioception).all():
+                raise ValueError("observation_state must be finite")
+            normalized_state = bundle.state_normalizer.normalize(proprioception)
+        else:
+            normalized_state = None
         normalized_action = bundle.model(
             features[0:1],
             features[1:2],
             torch.tensor([task_index], device=device),
+            normalized_state,
         )
         action = bundle.normalizer.denormalize(normalized_action)
+        policy_config = bundle.config["policy"]
+        if policy_config.get("action_representation", "absolute") == "future_delta":
+            if proprioception is None:
+                raise RuntimeError("future_delta policy has no proprioception")
+            lookahead_frames = int(policy_config.get("lookahead_frames", 1))
+            gain = float(
+                policy_config.get("execution_delta_gain", 1.0 / lookahead_frames)
+            )
+            action = proprioception + gain * action
     result = action[0].float().cpu()
     if result.shape != (7,) or not torch.isfinite(result).all():
         raise RuntimeError(f"Policy produced an invalid action: {result}")

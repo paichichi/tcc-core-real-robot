@@ -6,7 +6,11 @@ pytest.importorskip("torch")
 
 import torch
 
-from tcc_real_robot.policy_data import build_episode_records, load_cached_split
+from tcc_real_robot.policy_data import (
+    build_episode_records,
+    load_cached_future_delta_split,
+    load_cached_split,
+)
 
 
 def test_episode_split_has_no_frame_level_leakage(tmp_path: Path) -> None:
@@ -59,3 +63,27 @@ def test_load_cached_split_filters_episode_ids_per_task(tmp_path: Path) -> None:
     )
 
     assert loaded["action"].flatten().tolist() == [1.0, 10.0, 12.0]
+
+
+def test_future_delta_labels_are_shifted_within_each_episode(tmp_path: Path) -> None:
+    path = tmp_path / "train" / "task_0" / "episode_000000.pt"
+    path.parent.mkdir(parents=True)
+    state = torch.arange(20, dtype=torch.float32).reshape(4, 5)
+    action = state + 10.0
+    torch.save(
+        {
+            "cam_main": torch.arange(8).reshape(4, 2),
+            "cam_wrist": torch.arange(8).reshape(4, 2),
+            "action": action,
+            "state": state,
+            "task_index": torch.zeros(4, dtype=torch.long),
+        },
+        path,
+    )
+
+    loaded = load_cached_future_delta_split(tmp_path, "train", 2)
+
+    assert loaded["state"].shape == (2, 5)
+    assert torch.equal(loaded["state"], state[:2])
+    assert torch.equal(loaded["action"], action[2:] - state[:2])
+    assert loaded["cam_main"].shape == (2, 2)

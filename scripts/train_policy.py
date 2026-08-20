@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Train the offline TCC-MLP-BC v0 policy from cached features."""
+"""Train the future-delta TCC-MLP-BC v1 policy from cached features."""
 
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import random
 from pathlib import Path
@@ -14,14 +15,14 @@ import yaml
 from torch import nn
 
 from tcc_real_robot.policy import ActionNormalizer, TCCMLPPolicy
-from tcc_real_robot.policy_data import load_cached_split
+from tcc_real_robot.policy_data import load_cached_future_delta_split
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, default=Path("configs/experiment.yaml"))
     parser.add_argument("--cache-root", type=Path, default=Path("runs/feature_cache"))
-    parser.add_argument("--output-dir", type=Path, default=Path("runs/tcc_mlp_bc_v0"))
+    parser.add_argument("--output-dir", type=Path, default=Path("runs/tcc_mlp_bc_v1"))
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--steps", type=int)
     parser.add_argument("--log-every", type=int)
@@ -34,6 +35,39 @@ def sample_batch(
 ) -> dict[str, torch.Tensor]:
     indices = torch.randint(data["action"].shape[0], (batch_size,))
     return {key: value[indices].to(device) for key, value in data.items()}
+
+
+@torch.inference_mode()
+def evaluate_policy(
+    model: TCCMLPPolicy,
+    normalizer: ActionNormalizer,
+    state_normalizer: ActionNormalizer,
+    data: dict[str, torch.Tensor],
+    batch_size: int,
+    device: torch.device,
+) -> tuple[float, list[float]]:
+    """Evaluate normalized Huber loss and denormalized delta MAE."""
+    model.eval()
+    loss_total = 0.0
+    absolute_error = torch.zeros(7, device=device)
+    examples = int(data["action"].shape[0])
+    for start in range(0, examples, batch_size):
+        stop = min(start + batch_size, examples)
+        batch = {key: value[start:stop].to(device) for key, value in data.items()}
+        prediction = model(
+            batch["cam_main"].float(),
+            batch["cam_wrist"].float(),
+            batch["task_index"],
+            state_normalizer.normalize(batch["state"].float()),
+        )
+        normalized_target = normalizer.normalize(batch["action"])
+        loss = nn.functional.smooth_l1_loss(prediction, normalized_target)
+        count = stop - start
+        loss_total += float(loss) * count
+        absolute_error += torch.sum(
+            torch.abs(normalizer.denormalize(prediction) - batch["action"]), dim=0
+        )
+    return loss_total / examples, (absolute_error / examples).cpu().tolist()
 
 
 def main() -> None:
@@ -79,38 +113,58 @@ def main() -> None:
                 "training episodes for every task"
             )
         config["split"]["train_episodes_per_task"] = args.episodes_per_task
-        config["split"]["validation_episodes_per_task"] = 0
-        config["split"]["test_episodes_per_task"] = 0
         config["split"]["unused_episodes_per_task"] = (
             int(config["dataset"]["demonstrations_per_task"])
             - args.episodes_per_task
+            - int(config["split"]["validation_episodes_per_task"])
+            - int(config["split"]["test_episodes_per_task"])
         )
+        if config["split"]["unused_episodes_per_task"] < 0:
+            raise ValueError(
+                "Requested train/validation/test episodes exceed the dataset"
+            )
 
-    train = load_cached_split(
-        args.cache_root, "train", episode_ids_by_task=selected_episode_ids
+    policy_config = config["policy"]
+    if policy_config.get("action_representation") != "future_delta":
+        raise ValueError("MLP v1 requires action_representation=future_delta")
+    if policy_config.get("proprioception") is not True:
+        raise ValueError("MLP v1 requires proprioception")
+    lookahead_frames = int(policy_config["lookahead_frames"])
+    train = load_cached_future_delta_split(
+        args.cache_root,
+        "train",
+        lookahead_frames,
+        episode_ids_by_task=selected_episode_ids,
     )
+    validation = load_cached_future_delta_split(
+        args.cache_root, "validation", lookahead_frames
+    )
+    test = load_cached_future_delta_split(args.cache_root, "test", lookahead_frames)
     feature_dim = int(train["cam_main"].shape[1])
     if train["cam_wrist"].shape[1] != feature_dim:
         raise ValueError("Camera feature dimensions differ")
 
-    policy_config = config["policy"]
-    if policy_config["proprioception"] is not False:
-        raise ValueError("v0 is intentionally configured without proprioception")
     model = TCCMLPPolicy(
         feature_dim=feature_dim,
         num_tasks=int(policy_config["number_of_tasks"]),
         action_dim=int(policy_config["action_dim"]),
         hidden_dims=tuple(policy_config["hidden_dimensions"]),
-        proprio_dim=0,
+        proprio_dim=int(policy_config["proprioception_dim"]),
         input_batch_norm=bool(policy_config["input_batch_norm"]),
+        input_layer_norm=bool(policy_config["input_layer_norm"]),
     ).to(device)
     action_mean = train["action"].mean(dim=0)
     action_std = train["action"].std(dim=0)
     normalizer = ActionNormalizer(action_mean, action_std).to(device)
+    state_mean = train["state"].mean(dim=0)
+    state_std = train["state"].std(dim=0)
+    state_normalizer = ActionNormalizer(state_mean, state_std).to(device)
     optimizer = torch.optim.Adam(
         model.parameters(), lr=float(policy_config["learning_rate"])
     )
-    loss_function = nn.MSELoss()
+    if policy_config.get("loss") != "smooth_l1":
+        raise ValueError("MLP v1 requires smooth_l1 loss")
+    loss_function = nn.SmoothL1Loss()
     steps = args.steps or int(policy_config["training_steps"])
     log_every = args.log_every or int(policy_config["log_every"])
     batch_size = int(policy_config["batch_size"])
@@ -118,6 +172,9 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     history = []
+    best_validation_loss = float("inf")
+    best_step = 0
+    best_model_state: dict[str, torch.Tensor] | None = None
     for step in range(1, steps + 1):
         model.train()
         batch = sample_batch(train, batch_size, device)
@@ -125,6 +182,7 @@ def main() -> None:
             batch["cam_main"].float(),
             batch["cam_wrist"].float(),
             batch["task_index"],
+            state_normalizer.normalize(batch["state"].float()),
         )
         loss = loss_function(prediction, normalizer.normalize(batch["action"]))
         optimizer.zero_grad(set_to_none=True)
@@ -132,14 +190,36 @@ def main() -> None:
         optimizer.step()
 
         if step == 1 or step % log_every == 0 or step == steps:
-            row = {"step": step, "train_normalized_mse": float(loss.detach())}
+            validation_loss, validation_mae = evaluate_policy(
+                model,
+                normalizer,
+                state_normalizer,
+                validation,
+                batch_size * 4,
+                device,
+            )
+            row = {
+                "step": step,
+                "train_normalized_smooth_l1": float(loss.detach()),
+                "validation_normalized_smooth_l1": validation_loss,
+                "validation_delta_mae": validation_mae,
+            }
             history.append(row)
             print(json.dumps(row, sort_keys=True))
-    torch.save(
-        {
-            "model": model.state_dict(),
+            if validation_loss < best_validation_loss:
+                best_validation_loss = validation_loss
+                best_step = step
+                best_model_state = copy.deepcopy(model.state_dict())
+
+    def checkpoint_payload(
+        model_state: dict[str, torch.Tensor], checkpoint_step: int
+    ) -> dict[str, object]:
+        return {
+            "model": model_state,
             "action_mean": action_mean,
             "action_std": action_std,
+            "state_mean": state_mean,
+            "state_std": state_std,
             "feature_dim": feature_dim,
             "feature_cache_manifest": cache_manifest,
             "training_episode_ids": (
@@ -151,13 +231,43 @@ def main() -> None:
                 else None
             ),
             "config": config,
-            "step": steps,
+            "step": checkpoint_step,
+            "best_validation_step": best_step,
+            "best_validation_normalized_smooth_l1": best_validation_loss,
             "history": history,
             "actuation_enabled": False,
-        },
+        }
+
+    if best_model_state is None:
+        raise RuntimeError("No best validation checkpoint was selected")
+    final_model_state = copy.deepcopy(model.state_dict())
+    model.load_state_dict(best_model_state)
+    test_loss, test_mae = evaluate_policy(
+        model, normalizer, state_normalizer, test, batch_size * 4, device
+    )
+    model.load_state_dict(final_model_state)
+
+    torch.save(
+        checkpoint_payload(final_model_state, steps),
+        output_dir / "checkpoint_last.pt",
+    )
+    torch.save(
+        checkpoint_payload(best_model_state, best_step),
+        output_dir / "checkpoint_best.pt",
+    )
+    # Keep the Hub-compatible filename while deploying validation-selected weights.
+    torch.save(
+        checkpoint_payload(best_model_state, best_step),
         output_dir / f"checkpoint_{steps:06d}.pt",
     )
-    (output_dir / "metrics.json").write_text(json.dumps(history, indent=2) + "\n")
+    metrics = {
+        "history": history,
+        "best_validation_step": best_step,
+        "best_validation_normalized_smooth_l1": best_validation_loss,
+        "test_normalized_smooth_l1_at_best": test_loss,
+        "test_delta_mae_at_best": test_mae,
+    }
+    (output_dir / "metrics.json").write_text(json.dumps(metrics, indent=2) + "\n")
 
 
 if __name__ == "__main__":

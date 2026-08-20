@@ -1,8 +1,37 @@
-# Real-Robot Policy Evaluation
+# Real-Robot Policy Training and Evaluation
 
-当前支持 shadow evaluation、受控真实 policy rollout 和 demo replay。真实 policy
-执行默认使用固定的 `ours_rn50`、60-demo policy、carrot 任务、两台已配置的
-RealSense、离线 Hugging Face 缓存和完整 359 步：
+当前代码兼容旧的 `tcc_mlp_bc_v0` checkpoint，并提供改进后的
+`tcc_mlp_bc_v1_future_delta`：冻结视觉 backbone，输入两路视觉特征、7 维当前
+机器人状态和任务 ID，预测 10 帧后的状态增量。训练使用按 episode 划分的
+80/10/10 train/validation/test、LayerNorm、SmoothL1，并按 validation loss 选择
+部署 checkpoint。
+
+## 训练改进版 MLP policy
+
+先为指定的冻结 backbone 缓存两路图像特征：
+
+```bash
+python scripts/cache_policy_features.py --hub-backbone ours_rn50 --dataset-root datasets/pick_and_place_4_object_diverse --tcc-source-root /home/robotarm/TCC-core --cache-root runs/feature_cache/ours_rn50 --device cuda:0
+```
+
+再训练 policy head：
+
+```bash
+python scripts/train_policy.py --cache-root runs/feature_cache/ours_rn50 --output-dir runs/tcc_mlp_bc_v1/ours_rn50/80 --device cuda:0
+```
+
+输出的 `checkpoint_050000.pt` 和 `checkpoint_best.pt` 都是 validation 最优权重；
+前者兼容现有 Hugging Face 路径。`checkpoint_last.pt` 是第 50,000 步权重，
+`metrics.json` 记录训练曲线、最优 validation 指标和只评估一次的 test 指标。
+
+10 帧 future delta 对应数据集 20 Hz 下的 0.5 秒目标。执行时使用 `0.1` gain
+转换成一个 20 Hz 控制步，随后仍经过现有 driver 的逐步、累计、关节和 workspace
+限制。
+
+## 执行已发布的 policy
+
+真实 policy 执行默认使用固定的 `ours_rn50`、60-demo policy、carrot 任务、两台
+已配置的 RealSense、离线 Hugging Face 缓存和完整 359 步：
 
 ```bash
 python scripts/run_policy.py --execute-policy --emergency-stop-ready
@@ -176,9 +205,6 @@ strawberry
 
 ## 安全状态
 
-当前 policy 仍是 shadow-only。`--execute-home` 只会用 10 秒把六个关节慢速移动到
-`dataset_collection_home`，把夹爪设为 demo 首帧的 `0 m`，并在 eval 期间保持；
-它不会执行 policy 预测。程序退出时会恢复所有关节为 Idle。
-
-不要添加 `--execute`；该参数仍会被安全检查主动拒绝。只有当 home tracking、
-第 0 步动作差值、推理频率等检查全部通过时，TXT 报告才会给出 `Decision: PASS`。
+`--execute-home` 只执行回 home；`--execute-policy` 才会启用经过裁剪的真实 rollout，
+且必须同时给出 `--emergency-stop-ready`。不要使用保留参数 `--execute`。程序退出时
+会调用官方 driver cleanup 并恢复 Idle。新版 policy 不绕过任何现有动作边界。

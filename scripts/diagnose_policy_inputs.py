@@ -282,6 +282,7 @@ def main() -> None:
             task_index,
             image_size,
             device,
+            observation_state=home,
         )
         .numpy()
         .astype(np.float64)
@@ -299,6 +300,7 @@ def main() -> None:
             task_index,
             image_size,
             device,
+            observation_state=home,
         )
         if device.type == "cuda":
             torch.cuda.synchronize(device)
@@ -312,6 +314,7 @@ def main() -> None:
             task_index,
             image_size,
             device,
+            observation_state=home,
         )
         .numpy()
         .astype(np.float64)
@@ -391,6 +394,7 @@ def main() -> None:
             task_index,
             image_size,
             device,
+            observation_state=nearest_normal["state"],
         )
         .numpy()
         .astype(np.float64)
@@ -406,6 +410,7 @@ def main() -> None:
             task_index,
             image_size,
             device,
+            observation_state=home,
         )
         .numpy()
         .astype(np.float64)
@@ -419,6 +424,7 @@ def main() -> None:
             task_index,
             image_size,
             device,
+            observation_state=home,
         )
         .numpy()
         .astype(np.float64)
@@ -432,6 +438,7 @@ def main() -> None:
             task_index,
             image_size,
             device,
+            observation_state=home,
         )
         .numpy()
         .astype(np.float64)
@@ -445,6 +452,7 @@ def main() -> None:
             task_index,
             image_size,
             device,
+            observation_state=home,
         )
         .numpy()
         .astype(np.float64)
@@ -458,6 +466,7 @@ def main() -> None:
             task_index,
             image_size,
             device,
+            observation_state=home,
         )
         .numpy()
         .astype(np.float64)

@@ -44,21 +44,27 @@ model_hub:
   supported_demonstrations: [40, 60, 80]
 
 policy:
-  implementation: tcc_mlp_bc_v0
+  implementation: tcc_mlp_bc_v1_future_delta
   cameras:
     - cam_main
     - cam_wrist
   shared_camera_backbone: true
   task_conditioning: one_hot
   number_of_tasks: 4
-  proprioception: false
+  proprioception: true
+  proprioception_dim: 7
   action_dim: 7
   action_chunk_size: 1
+  action_representation: future_delta
+  lookahead_frames: 10
+  # Convert the 10-frame (0.5 s) prediction into one 20 Hz control step.
+  execution_delta_gain: 0.1
   hidden_dimensions: [256, 256]
   activation: relu
-  input_batch_norm: true
+  input_batch_norm: false
+  input_layer_norm: true
   optimizer: adam
-  loss: mse
+  loss: smooth_l1
   training_steps: 50000
   batch_size: 32
   learning_rate: 0.001
@@ -69,7 +75,7 @@ evaluation:
   max_rollout_steps: 359
 
 split:
-  train_episodes_per_task: 60
-  validation_episodes_per_task: 0
-  test_episodes_per_task: 0
-  unused_episodes_per_task: 40
+  train_episodes_per_task: 80
+  validation_episodes_per_task: 10
+  test_episodes_per_task: 10
+  unused_episodes_per_task: 0
