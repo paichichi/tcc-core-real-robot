@@ -31,6 +31,25 @@ class PolicyBundle:
     step: int
 
 
+def validate_policy_contract(
+    runtime_config: dict[str, Any], bundle: PolicyBundle
+) -> None:
+    """Reject a checkpoint trained for different policy input/output semantics."""
+    expected = runtime_config["policy"]
+    actual = bundle.config["policy"]
+    fields = ("proprioception", "proprioception_dim", "action_representation")
+    mismatches = {
+        field: (expected.get(field), actual.get(field))
+        for field in fields
+        if expected.get(field) != actual.get(field)
+    }
+    if mismatches:
+        raise RuntimeError(
+            "Runtime config/checkpoint policy contract mismatch: "
+            f"{mismatches}"
+        )
+
+
 def resolve_device(requested: str) -> torch.device:
     """Resolve ``auto`` without silently accepting an unavailable accelerator."""
     if requested == "auto":

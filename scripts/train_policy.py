@@ -210,7 +210,7 @@ def main() -> None:
         model.parameters(), lr=float(policy_config["learning_rate"])
     )
     if policy_config.get("loss") != "smooth_l1":
-        raise ValueError("MLP v1 requires smooth_l1 loss")
+        raise ValueError("The MLP policy trainer requires smooth_l1 loss")
     loss_function = nn.SmoothL1Loss()
     steps = args.steps or int(policy_config["training_steps"])
     log_every = args.log_every or int(policy_config["log_every"])

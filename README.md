@@ -1,6 +1,23 @@
 # Real-Robot Policy Training and Evaluation
 
-## 推荐的新实验：ViT、60 demos、纯视觉 absolute action
+## 推荐的新实验：v3 proprioception + absolute action
+
+v2 纯视觉单帧 MLP 在 20 Hz 实机 rollout 中约一半相邻输出发生方向反转，359
+帧中 308 帧触发 limiter，并在高处形成错误固定点。v3 使用
+`configs/experiment_proprio_absolute_60.yaml`：冻结双摄像头 backbone，拼接经过
+train split 统计量归一化的 7-D 当前机器人状态，直接预测 7-D absolute action。
+它不使用旧 v1 的 future-delta。训练仍采用 `[256, 256]` MLP、SmoothL1 和
+60/20/20 episode split。
+
+训练命令已集中写入 `LINUX_COMMANDS.txt`。真实执行端还会从实测 home 初始化
+`alpha=0.25` 的 policy-target EMA，再进入原有 dataset envelope、逐帧 slew、command
+lead 和速度限制。报告同时保留 `raw_action` 与过滤后的 `action`，首帧安全检查仍使用
+raw policy，EMA 不会掩盖不安全 checkpoint。
+
+在 v3 policy 上传并固定新的 Hugging Face commit 前，不要用 v3 配置执行机械臂；
+runtime contract 检查会拒绝把旧 v2 checkpoint 当成 v3。
+
+## 已完成的 v2 实验：ViT、60 demos、纯视觉 absolute action
 
 连续两次 RN50 rollout 和一次 ViT rollout 都在 driver 正常跟踪的情况下走向
 近似固定的错误轨迹。新实验与旧 v1 隔离，使用

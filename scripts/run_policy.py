@@ -366,6 +366,7 @@ def main() -> None:
         load_policy_bundle,
         predict_action,
         resolve_device,
+        validate_policy_contract,
     )
     from tcc_real_robot.tcc_backbone import load_frozen_tcc_backbone
 
@@ -409,6 +410,7 @@ def main() -> None:
         expected_feature_dim=int(backbone_metadata["feature_dim"]),
         device=device,
     )
+    validate_policy_contract(config, bundle)
     checkpoint_policy_config = bundle.config["policy"]
     action_representation = checkpoint_policy_config.get(
         "action_representation", "absolute"
@@ -467,6 +469,7 @@ def main() -> None:
     previous_policy_sample: tuple[float, tuple[float, ...]] | None = None
     max_observed_arm_velocity = 0.0
     max_observed_gripper_velocity = 0.0
+    action_filter: Any | None = None
     dataset_action_min: list[float] | None = None
     dataset_action_max: list[float] | None = None
     if args.execute_clipped_step:
@@ -541,6 +544,10 @@ def main() -> None:
         report.write(f"Policy rollout rate: {fps:.3f} Hz\n")
         if args.execute_clipped_step:
             clipped = evaluation_settings["clipped_rollout"]
+            action_ema_alpha = float(evaluation_settings["action_ema_alpha"])
+            if not 0.0 < action_ema_alpha <= 1.0:
+                raise ValueError("policy_evaluation.action_ema_alpha must be in (0, 1]")
+            report.write(f"Policy target EMA alpha: {action_ema_alpha:.3f}\n")
             goal_time = float(clipped["min_time_to_move_multiplier"]) / float(
                 clipped["control_fps"]
             )
@@ -681,6 +688,15 @@ def main() -> None:
                     )
                 if home_session is not None:
                     home_reference = home_session.read_positions()
+                    if args.execute_clipped_step:
+                        from tcc_real_robot.continuous_control import (
+                            ExponentialActionFilter,
+                        )
+
+                        action_filter = ExponentialActionFilter(
+                            home_reference,
+                            float(evaluation_settings["action_ema_alpha"]),
+                        )
                 rollout_started = time.monotonic()
                 for step in range(max_steps):
                     deadline = rollout_started + step * period
@@ -712,7 +728,7 @@ def main() -> None:
                         (time.monotonic() - state_started) * 1000.0
                     )
                     policy_started = time.monotonic()
-                    action = predict_action(
+                    raw_action = predict_action(
                         backbone,
                         bundle,
                         main_rgb,
@@ -723,6 +739,11 @@ def main() -> None:
                         observation_state=policy_state,
                         execution_delta_gain_override=runtime_execution_delta_gain,
                     )
+                    action = raw_action
+                    if action_filter is not None:
+                        action = raw_action.new_tensor(
+                            action_filter.update(raw_action.tolist())
+                        )
                     policy_latencies_ms.append(
                         (time.monotonic() - policy_started) * 1000.0
                     )
@@ -734,12 +755,14 @@ def main() -> None:
                         first_arm_delta = max(
                             abs(predicted - current)
                             for predicted, current in zip(
-                                action[:6].tolist(),
+                                raw_action[:6].tolist(),
                                 home_reference[:6],
                                 strict=True,
                             )
                         )
-                        first_gripper_delta = abs(float(action[6]) - home_reference[6])
+                        first_gripper_delta = abs(
+                            float(raw_action[6]) - home_reference[6]
+                        )
                     if args.execute_clipped_step:
                         if home_session is None or home_reference is None:
                             raise RuntimeError(
@@ -822,6 +845,13 @@ def main() -> None:
                             f"{bounded_step.max_arm_command_gap_rad:.7f}\n"
                             f"step={step:03d} gripper_immediate_command_gap_m="
                             f"{bounded_step.gripper_command_gap_m:.7f}\n"
+                        )
+                    if action_filter is not None:
+                        raw_values = ", ".join(
+                            f"{value:.7f}" for value in raw_action.tolist()
+                        )
+                        report.write(
+                            f"step={step:03d} raw_action=[{raw_values}]\n"
                         )
                     values = ", ".join(f"{value:.7f}" for value in action.tolist())
                     report.write(

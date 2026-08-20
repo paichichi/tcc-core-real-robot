@@ -10,6 +10,7 @@ from tcc_real_robot.policy_runtime import (  # noqa: E402
     load_policy_bundle,
     predict_action,
     preprocess_rgb_frames,
+    validate_policy_contract,
 )
 
 
@@ -113,6 +114,24 @@ def test_policy_feature_mismatch_is_rejected(tmp_path: Path) -> None:
         load_policy_bundle(
             checkpoint, expected_feature_dim=4, device=torch.device("cpu")
         )
+
+
+def test_runtime_rejects_checkpoint_with_different_proprioception(tmp_path: Path) -> None:
+    checkpoint = tmp_path / "policy.pt"
+    torch.save(checkpoint_payload(), checkpoint)
+    bundle = load_policy_bundle(
+        checkpoint, expected_feature_dim=3, device=torch.device("cpu")
+    )
+    runtime = {
+        "policy": {
+            "proprioception": True,
+            "proprioception_dim": 7,
+            "action_representation": "absolute",
+        }
+    }
+
+    with pytest.raises(RuntimeError, match="contract mismatch"):
+        validate_policy_contract(runtime, bundle)
 
 
 def test_future_delta_policy_reconstructs_absolute_target(tmp_path: Path) -> None:

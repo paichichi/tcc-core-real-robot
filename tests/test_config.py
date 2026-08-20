@@ -24,6 +24,7 @@ def test_initial_revision_disables_actuation() -> None:
     assert config["policy_evaluation"]["inference_warmup_steps"] >= 1
     assert config["policy_evaluation"]["minimum_observed_rate_hz"] == 18.0
     assert config["policy_evaluation"]["camera_capture_fps"] == 30.0
+    assert config["policy_evaluation"]["action_ema_alpha"] == 0.25
     clipped = config["policy_evaluation"]["clipped_rollout"]
     assert clipped["max_steps"] == 900
     assert clipped["max_action_delta"] == [
@@ -123,6 +124,26 @@ def test_visual_absolute_60_policy_configuration() -> None:
     assert policy["loss"] == "smooth_l1"
     assert config["evaluation"]["max_rollout_steps"] == 359
     assert "horizon" not in policy
+
+
+def test_proprio_absolute_60_policy_configuration() -> None:
+    config = load_yaml(ROOT / "configs" / "experiment_proprio_absolute_60.yaml")
+    policy = config["policy"]
+    assert policy["implementation"] == "tcc_mlp_bc_v3_proprio_absolute"
+    assert policy["proprioception"] is True
+    assert policy["proprioception_dim"] == 7
+    assert policy["action_representation"] == "absolute"
+    assert policy["hidden_dimensions"] == [256, 256]
+    assert policy["input_batch_norm"] is False
+    assert policy["input_layer_norm"] is True
+    assert "lookahead_frames" not in policy
+    assert "execution_delta_gain" not in policy
+    assert config["split"] == {
+        "train_episodes_per_task": 60,
+        "validation_episodes_per_task": 20,
+        "test_episodes_per_task": 20,
+        "unused_episodes_per_task": 0,
+    }
 
 
 def test_model_hub_is_pinned_to_an_immutable_revision() -> None:

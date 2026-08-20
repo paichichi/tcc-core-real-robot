@@ -109,3 +109,25 @@ class StatefulPositionLimiter:
                 for target, measured in zip(commanded, observed, strict=True)
             ),
         )
+
+
+class ExponentialActionFilter:
+    """Low-pass noisy absolute policy targets without changing their units."""
+
+    def __init__(self, initial_action: list[float], alpha: float) -> None:
+        if len(initial_action) != 7 or not all(isfinite(v) for v in initial_action):
+            raise ValueError("Initial action must contain seven finite values")
+        if not 0.0 < alpha <= 1.0:
+            raise ValueError("EMA alpha must be in (0, 1]")
+        self.alpha = alpha
+        self.previous = tuple(initial_action)
+
+    def update(self, raw_action: list[float]) -> tuple[float, ...]:
+        if len(raw_action) != 7 or not all(isfinite(v) for v in raw_action):
+            raise ValueError("Raw action must contain seven finite values")
+        filtered = tuple(
+            previous + self.alpha * (raw - previous)
+            for raw, previous in zip(raw_action, self.previous, strict=True)
+        )
+        self.previous = filtered
+        return filtered

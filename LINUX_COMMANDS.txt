@@ -1,1 +1,4 @@
-python scripts/run_policy.py --config configs/experiment_visual_absolute_60.yaml --backbone ours_rn50 --demonstrations 60 --task carrot --execute-policy --emergency-stop-ready --max-steps 359
+python scripts/cache_policy_features.py --config configs/experiment_proprio_absolute_60.yaml --hub-backbone ours_rn50 --dataset-root datasets/pick_and_place_4_object_diverse --tcc-source-root /home/robotarm/TCC-core --cache-root runs/feature_cache_v3/ours_rn50/60 --device cuda:0
+python scripts/train_policy.py --config configs/experiment_proprio_absolute_60.yaml --cache-root runs/feature_cache_v3/ours_rn50/60 --output-dir runs/tcc_mlp_bc_v3/ours_rn50/60 --device cuda:0
+python scripts/cache_policy_features.py --config configs/experiment_proprio_absolute_60.yaml --hub-backbone ours_vit --dataset-root datasets/pick_and_place_4_object_diverse --tcc-source-root /home/robotarm/TCC-core --cache-root runs/feature_cache_v3/ours_vit/60 --device cuda:0
+python scripts/train_policy.py --config configs/experiment_proprio_absolute_60.yaml --cache-root runs/feature_cache_v3/ours_vit/60 --output-dir runs/tcc_mlp_bc_v3/ours_vit/60 --device cuda:0
