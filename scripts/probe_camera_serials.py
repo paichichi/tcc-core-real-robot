@@ -10,7 +10,11 @@ from pathlib import Path
 
 import cv2
 
-from inspect_camera_identity import udev_properties, video_number
+from inspect_camera_identity import (
+    sysfs_usb_identity,
+    udev_properties,
+    video_number,
+)
 from preview_cameras import build_contact_sheet, capture_node, label_frame
 
 
@@ -31,9 +35,13 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def matches_serial(properties: dict[str, str], serial: str) -> bool:
-    return properties.get("ID_SERIAL_SHORT") == serial or serial in properties.get(
-        "ID_SERIAL", ""
+def matches_serial(
+    properties: dict[str, str], usb_identity: dict[str, str], serial: str
+) -> bool:
+    return (
+        properties.get("ID_SERIAL_SHORT") == serial
+        or serial in properties.get("ID_SERIAL", "")
+        or usb_identity.get("SYSFS_USB_SERIAL") == serial
     )
 
 
@@ -51,10 +59,20 @@ def main() -> None:
         args.wrist_serial: "cam_wrist / D405",
     }
     candidates = []
+    discovered = []
     for device in sorted(glob.glob("/dev/video*"), key=video_number):
         properties = udev_properties(device)
+        usb_identity = sysfs_usb_identity(device)
+        discovered.append(
+            (
+                device,
+                properties.get("ID_SERIAL_SHORT", "UNAVAILABLE"),
+                usb_identity.get("SYSFS_USB_SERIAL", "UNAVAILABLE"),
+                usb_identity.get("SYSFS_USB_PRODUCT", "UNAVAILABLE"),
+            )
+        )
         for serial, role in serial_roles.items():
-            if matches_serial(properties, serial):
+            if matches_serial(properties, usb_identity, serial):
                 candidates.append((device, serial, role, properties))
                 break
 
@@ -64,7 +82,13 @@ def main() -> None:
         if not any(candidate[1] == serial for candidate in candidates)
     ]
     if missing:
-        raise RuntimeError(f"No V4L2 nodes found for serials: {missing}")
+        details = "; ".join(
+            f"{device}: udev={udev_serial}, sysfs={sysfs_serial}, product={product}"
+            for device, udev_serial, sysfs_serial, product in discovered
+        )
+        raise RuntimeError(
+            f"No V4L2 nodes found for serials: {missing}. Discovered: {details}"
+        )
 
     frames = []
     rows = [

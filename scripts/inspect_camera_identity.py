@@ -55,6 +55,29 @@ def udev_properties(device: str) -> dict[str, str]:
     return properties
 
 
+def sysfs_usb_identity(device: str) -> dict[str, str]:
+    """Find USB identity attributes by walking above a video4linux node."""
+    node = Path(device).name
+    device_path = (Path("/sys/class/video4linux") / node / "device").resolve()
+    for candidate in (device_path, *device_path.parents):
+        serial = read_text(candidate / "serial")
+        vendor = read_text(candidate / "idVendor")
+        product_id = read_text(candidate / "idProduct")
+        if serial != "UNAVAILABLE" or (
+            vendor != "UNAVAILABLE" and product_id != "UNAVAILABLE"
+        ):
+            return {
+                "SYSFS_USB_PATH": str(candidate),
+                "SYSFS_USB_SERIAL": serial,
+                "SYSFS_USB_VENDOR_ID": vendor,
+                "SYSFS_USB_PRODUCT_ID": product_id,
+                "SYSFS_USB_PRODUCT": read_text(candidate / "product"),
+                "SYSFS_USB_BUSNUM": read_text(candidate / "busnum"),
+                "SYSFS_USB_DEVPATH": read_text(candidate / "devpath"),
+            }
+    return {}
+
+
 def symlink_rows(directory: Path) -> list[str]:
     if not directory.is_dir():
         return [f"{directory}: UNAVAILABLE"]
@@ -100,6 +123,7 @@ def main() -> None:
         node = Path(device).name
         sysfs_root = Path("/sys/class/video4linux") / node
         properties = udev_properties(device)
+        usb_identity = sysfs_usb_identity(device)
         lines.extend(
             (
                 f"[{device}]",
@@ -110,6 +134,16 @@ def main() -> None:
         )
         for key in PROPERTY_KEYS:
             lines.append(f"{key}: {properties.get(key, 'UNAVAILABLE')}")
+        for key in (
+            "SYSFS_USB_PATH",
+            "SYSFS_USB_SERIAL",
+            "SYSFS_USB_VENDOR_ID",
+            "SYSFS_USB_PRODUCT_ID",
+            "SYSFS_USB_PRODUCT",
+            "SYSFS_USB_BUSNUM",
+            "SYSFS_USB_DEVPATH",
+        ):
+            lines.append(f"{key}: {usb_identity.get(key, 'UNAVAILABLE')}")
         if "UDEV_ERROR" in properties:
             lines.append(f"UDEV_ERROR: {properties['UDEV_ERROR']}")
         lines.append("")
