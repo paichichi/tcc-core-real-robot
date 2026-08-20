@@ -256,14 +256,18 @@ def main() -> None:
     for index, row in enumerate(demo_rows):
         demo_main_feature = features[2 + index * 2]
         demo_wrist_feature = features[3 + index * 2]
-        row["normal_similarity"] = float(
-            (
-                torch_f.cosine_similarity(live_main_feature, demo_main_feature, dim=0)
-                + torch_f.cosine_similarity(
-                    live_wrist_feature, demo_wrist_feature, dim=0
-                )
+        row["main_similarity"] = float(
+            torch_f.cosine_similarity(
+                live_main_feature, demo_main_feature, dim=0
             )
-            / 2.0
+        )
+        row["wrist_similarity"] = float(
+            torch_f.cosine_similarity(
+                live_wrist_feature, demo_wrist_feature, dim=0
+            )
+        )
+        row["normal_similarity"] = float(
+            (row["main_similarity"] + row["wrist_similarity"]) / 2.0
         )
         row["swapped_similarity"] = float(
             (
@@ -277,12 +281,58 @@ def main() -> None:
 
     nearest_normal = max(demo_rows, key=lambda row: row["normal_similarity"])
     nearest_swapped = max(demo_rows, key=lambda row: row["swapped_similarity"])
+    demo_pair_similarities = []
+    for left in range(len(demo_rows)):
+        for right in range(left + 1, len(demo_rows)):
+            demo_pair_similarities.append(
+                float(
+                    (
+                        torch_f.cosine_similarity(
+                            features[2 + left * 2],
+                            features[2 + right * 2],
+                            dim=0,
+                        )
+                        + torch_f.cosine_similarity(
+                            features[3 + left * 2],
+                            features[3 + right * 2],
+                            dim=0,
+                        )
+                    )
+                    / 2.0
+                )
+            )
     nearest_prediction = (
         predict_action(
             backbone,
             bundle,
             nearest_normal["main"],
             nearest_normal["wrist"],
+            task_index,
+            image_size,
+            device,
+        )
+        .numpy()
+        .astype(np.float64)
+    )
+    live_main_demo_wrist_prediction = (
+        predict_action(
+            backbone,
+            bundle,
+            live_main,
+            nearest_normal["wrist"],
+            task_index,
+            image_size,
+            device,
+        )
+        .numpy()
+        .astype(np.float64)
+    )
+    demo_main_live_wrist_prediction = (
+        predict_action(
+            backbone,
+            bundle,
+            nearest_normal["main"],
+            live_wrist,
             task_index,
             image_size,
             device,
@@ -331,6 +381,12 @@ def main() -> None:
 
     normal_arm_delta, normal_gripper_delta = action_delta(live_prediction, home)
     swapped_arm_delta, swapped_gripper_delta = action_delta(swapped_prediction, home)
+    live_main_demo_wrist_delta = action_delta(
+        live_main_demo_wrist_prediction, home
+    )
+    demo_main_live_wrist_delta = action_delta(
+        demo_main_live_wrist_prediction, home
+    )
     nearest_action_error = np.abs(nearest_prediction - nearest_normal["action"])
     with report_path.open("w", encoding="utf-8") as report:
         report.write("Live Policy Input Diagnostic\n")
@@ -351,14 +407,49 @@ def main() -> None:
         report.write(f"Live swapped maximum arm delta: {swapped_arm_delta:.7f} rad\n")
         report.write(f"Live swapped gripper delta: {swapped_gripper_delta:.7f} m\n\n")
         report.write(
+            "Live-main + demo-wrist prediction: "
+            f"{live_main_demo_wrist_prediction.tolist()}\n"
+        )
+        report.write(
+            "Live-main + demo-wrist maximum arm delta: "
+            f"{live_main_demo_wrist_delta[0]:.7f} rad\n"
+        )
+        report.write(
+            "Live-main + demo-wrist gripper delta: "
+            f"{live_main_demo_wrist_delta[1]:.7f} m\n"
+        )
+        report.write(
+            "Demo-main + live-wrist prediction: "
+            f"{demo_main_live_wrist_prediction.tolist()}\n"
+        )
+        report.write(
+            "Demo-main + live-wrist maximum arm delta: "
+            f"{demo_main_live_wrist_delta[0]:.7f} rad\n"
+        )
+        report.write(
+            "Demo-main + live-wrist gripper delta: "
+            f"{demo_main_live_wrist_delta[1]:.7f} m\n\n"
+        )
+        report.write(
             "Nearest normal-order demo: "
             f"episode {nearest_normal['episode']:06d}, "
             f"similarity={nearest_normal['normal_similarity']:.7f}\n"
         )
         report.write(
+            "Nearest normal-order component similarities: "
+            f"main={nearest_normal['main_similarity']:.7f}, "
+            f"wrist={nearest_normal['wrist_similarity']:.7f}\n"
+        )
+        report.write(
             "Nearest swapped-order demo: "
             f"episode {nearest_swapped['episode']:06d}, "
             f"similarity={nearest_swapped['swapped_similarity']:.7f}\n"
+        )
+        report.write(
+            "Demo-to-demo pair similarity min/median/max: "
+            f"{min(demo_pair_similarities):.7f} / "
+            f"{float(np.median(demo_pair_similarities)):.7f} / "
+            f"{max(demo_pair_similarities):.7f}\n"
         )
         report.write(f"Nearest demo state: {nearest_normal['state'].tolist()}\n")
         report.write(f"Nearest demo action: {nearest_normal['action'].tolist()}\n")
