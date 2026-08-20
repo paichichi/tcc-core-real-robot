@@ -1,1 +1,1 @@
-python scripts/run_policy.py --execute-policy --emergency-stop-ready --max-steps 500
+python scripts/run_policy.py --execute-policy --emergency-stop-ready --max-steps 700
