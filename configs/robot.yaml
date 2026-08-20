@@ -75,7 +75,7 @@ policy_evaluation:
   inference_warmup_steps: 3
   minimum_observed_rate_hz: 18.0
   clipped_rollout:
-    max_steps: 180
+    max_steps: 359
     max_action_delta:
       [0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.001]
     dataset_action_limits:
