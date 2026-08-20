@@ -33,14 +33,26 @@ def parse_args() -> argparse.Namespace:
         help="Configured task name, or carrot/pineapple/starfruit/strawberry.",
     )
     parser.add_argument(
+        "--camera-backend",
+        choices=("realsense-sdk", "v4l2"),
+        default="realsense-sdk",
+        help="Camera API. RealSense SDK is the default and safest for RGB streams.",
+    )
+    parser.add_argument(
+        "--cam-main-serial",
+        help="RealSense serial for cam_main; defaults to robot config.",
+    )
+    parser.add_argument(
+        "--cam-wrist-serial",
+        help="RealSense serial for cam_wrist; defaults to robot config.",
+    )
+    parser.add_argument(
         "--cam-main",
-        required=True,
-        help="Main camera index/path, for example 0 or /dev/v4l/by-id/...",
+        help="Legacy V4L2 main camera index/path; only used with --camera-backend v4l2.",
     )
     parser.add_argument(
         "--cam-wrist",
-        required=True,
-        help="Wrist camera index/path, for example 2 or /dev/v4l/by-id/...",
+        help="Legacy V4L2 wrist camera index/path; only used with --camera-backend v4l2.",
     )
     parser.add_argument("--tcc-source-root", type=Path, required=True)
     parser.add_argument("--hub-cache-dir", type=Path)
@@ -287,6 +299,20 @@ def main() -> None:
         raise SystemExit("--controller-timeout must be positive")
     config = load_yaml(args.config)
     robot_config = load_yaml(args.robot_config)
+    if args.camera_backend == "realsense-sdk":
+        configured_cameras = robot_config["cameras"]
+        args.cam_main_serial = args.cam_main_serial or str(
+            configured_cameras["cam_main"]["serial_number"]
+        )
+        args.cam_wrist_serial = args.cam_wrist_serial or str(
+            configured_cameras["cam_wrist"]["serial_number"]
+        )
+        if args.cam_main_serial == args.cam_wrist_serial:
+            raise SystemExit("Main and wrist RealSense serials must be distinct")
+    elif not args.cam_main or not args.cam_wrist:
+        raise SystemExit(
+            "--camera-backend v4l2 requires --cam-main and --cam-wrist"
+        )
     assert_shadow_only(robot_config, args.execute)
     if args.execute_clipped_step:
         if not args.execute_home:
@@ -302,8 +328,6 @@ def main() -> None:
             raise SystemExit(
                 "--execute-clipped-step requires --emergency-stop-ready"
             )
-
-    import cv2
 
     from tcc_real_robot.policy_runtime import (
         load_policy_bundle,
@@ -409,11 +433,16 @@ def main() -> None:
         report.write(f"Backbone SHA256: {assets.backbone_sha256}\n")
         report.write(f"Policy SHA256: {assets.policy_sha256}\n")
         report.write(f"Device: {device}\n")
-        report.write(f"Camera main: {args.cam_main}\n")
-        report.write(f"Camera wrist: {args.cam_wrist}\n")
+        report.write(f"Camera backend: {args.camera_backend}\n")
+        if args.camera_backend == "realsense-sdk":
+            report.write(f"Camera main serial: {args.cam_main_serial}\n")
+            report.write(f"Camera wrist serial: {args.cam_wrist_serial}\n")
+        else:
+            report.write(f"Camera main: {args.cam_main}\n")
+            report.write(f"Camera wrist: {args.cam_wrist}\n")
         report.write(
             f"Camera capture rate: {camera_capture_fps:.3f} FPS "
-            "(validated V4L2 profile)\n"
+            f"(validated {args.camera_backend} color profile)\n"
         )
         report.write(f"Camera startup delay: {args.camera_startup_delay:.3f} s\n")
         report.write(f"Camera read attempts: {args.camera_read_attempts}\n")
@@ -484,19 +513,49 @@ def main() -> None:
                 )
 
             report.write("Predicted denormalized absolute actions\n")
-            with SynchronizedCameras(
-                cv2,
-                args.cam_main,
-                args.cam_wrist,
-                width,
-                height,
-                camera_capture_fps,
-                startup_delay_s=args.camera_startup_delay,
-                read_attempts=args.camera_read_attempts,
-                retry_delay_s=args.camera_retry_delay,
-                minimum_channel_std=args.camera_min_channel_std,
-                maximum_pair_skew_ms=args.camera_max_pair_skew_ms,
-            ) as cameras:
+            if args.camera_backend == "realsense-sdk":
+                try:
+                    import pyrealsense2 as rs
+                except ImportError as exc:
+                    raise RuntimeError(
+                        "pyrealsense2 is required for --camera-backend "
+                        "realsense-sdk; install the robot extras"
+                    ) from exc
+                from tcc_real_robot.realsense_cameras import RealSenseColorCameras
+
+                if not camera_capture_fps.is_integer():
+                    raise RuntimeError(
+                        "RealSense SDK capture FPS must be a whole number"
+                    )
+                camera_context: Any = RealSenseColorCameras(
+                    rs,
+                    args.cam_main_serial,
+                    args.cam_wrist_serial,
+                    width,
+                    height,
+                    int(camera_capture_fps),
+                    timeout_ms=max(1, int(args.controller_timeout * 1000)),
+                    read_attempts=args.camera_read_attempts,
+                    minimum_channel_std=args.camera_min_channel_std,
+                    maximum_pair_skew_ms=args.camera_max_pair_skew_ms,
+                )
+            else:
+                import cv2
+
+                camera_context = SynchronizedCameras(
+                    cv2,
+                    args.cam_main,
+                    args.cam_wrist,
+                    width,
+                    height,
+                    camera_capture_fps,
+                    startup_delay_s=args.camera_startup_delay,
+                    read_attempts=args.camera_read_attempts,
+                    retry_delay_s=args.camera_retry_delay,
+                    minimum_channel_std=args.camera_min_channel_std,
+                    maximum_pair_skew_ms=args.camera_max_pair_skew_ms,
+                )
+            with camera_context as cameras:
                 report.write(f"Camera main negotiated: {cameras.main_properties}\n")
                 report.write(
                     f"Camera wrist negotiated: {cameras.wrist_properties}\n\n"

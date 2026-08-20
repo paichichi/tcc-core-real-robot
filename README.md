@@ -15,53 +15,32 @@ source .venv/bin/activate
 python -m pip install -e '.[train,eval,robot,dev]'
 ```
 
-## 3. 确认两个相机的 Linux 路径
+## 3. 确认两个 RealSense 相机
 
 ```bash
-ls -l /dev/v4l/by-id/
+python scripts/inspect_realsense_sdk.py
 ```
 
-记录主相机 `cam_main` 和腕部相机 `cam_wrist` 对应的路径。
-
-如果 `/dev/v4l/by-id/` 不存在，可以检查：
-
-```bash
-ls -l /dev/video*
-```
-
-直接抓取所有视频节点并显示带编号的画面：
-
-```bash
-python scripts/preview_cameras.py
-```
-
-在弹出的总览中人工判断哪一个画面是主相机、哪一个是腕部相机。按 `q`
-或 `Esc` 关闭窗口。总览同时保存到 `outputs/camera_probe_<timestamp>.jpg`。
-
-如果驱动电脑没有图形界面：
-
-```bash
-python scripts/preview_cameras.py --no-display
-```
-
-当前相机状态：双相机 V4L2 测试已通过。两路相机均稳定协商为
-`640x480 @ 30 FPS`，丢弃 5 对 warmup 后有效帧均为 `10/10`，最大主机侧帧对
-偏差为 `0.004 ms`。
+正式 eval 通过 RealSense SDK 按设备序列号读取明确的 `color/RGB8` 流，不再依赖
+可能在重启后变化、并且可能指向深度流的 `/dev/video*` 编号：
 
 ```text
-cam_main  = /dev/video10
-cam_wrist = /dev/video2
-D405 fallback/diagnostic node = /dev/video4
+cam_main  = D435, serial 838212073584
+cam_wrist = D405, serial 409122274608
+stream    = color, RGB8, 640x480 @ 30 FPS
 ```
 
-D405 曾出现纯绿色无效帧和读取超时，确认重置后恢复。进一步测试证明两台相机请求
-20 FPS 时都会退回 15 FPS，而 30 FPS profile 可以稳定运行。因此相机底层固定为
-30 FPS，policy 仍严格按 dataset metadata 以 20 Hz 读取 observation。代码继续使用
-启动 warmup、读取重试、最大帧对偏差和 flat-frame 检查作为 fail-closed 防护。
+首次运行或重新插拔相机后，先执行纯相机采集：
 
-`/dev/video*` 编号和可用流可能在重启或重新插拔 USB 后改变，因此每次正式 eval
-前都应重新运行 `preview_cameras.py` 检查画面。如果目标节点出现 `READ FAILED`，
-不要继续使用该节点。
+```bash
+python scripts/capture_policy_frames.py \
+  --cam-main-serial 838212073584 \
+  --cam-wrist-serial 409122274608
+```
+
+确认输出图片颜色正常后再运行 policy。相机底层固定为 30 FPS，policy 按 dataset
+metadata 以 20 Hz 读取 observation；代码保留 warmup、读取重试、最大帧对时间差和
+flat-frame 检查。V4L2 仅作为显式指定的兼容后端，不用于默认 eval。
 
 ## 4. 下载并校验模型
 
@@ -122,8 +101,9 @@ python scripts/run_policy.py \
   --backbone ours_rn50 \
   --demonstrations 60 \
   --task carrot \
-  --cam-main /dev/video10 \
-  --cam-wrist /dev/video2 \
+  --camera-backend realsense-sdk \
+  --cam-main-serial 838212073584 \
+  --cam-wrist-serial 409122274608 \
   --tcc-source-root /home/robotarm/TCC-core \
   --offline \
   --device auto \
@@ -166,8 +146,9 @@ python scripts/run_policy.py \
   --backbone ours_rn50 \
   --demonstrations 60 \
   --task carrot \
-  --cam-main /dev/video10 \
-  --cam-wrist /dev/video2 \
+  --camera-backend realsense-sdk \
+  --cam-main-serial 838212073584 \
+  --cam-wrist-serial 409122274608 \
   --tcc-source-root /home/robotarm/TCC-core \
   --offline \
   --device auto \
