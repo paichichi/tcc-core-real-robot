@@ -97,6 +97,30 @@ def test_future_delta_policy_configuration() -> None:
     assert "horizon" not in policy
 
 
+def test_visual_absolute_60_policy_configuration() -> None:
+    config = load_yaml(ROOT / "configs" / "experiment_visual_absolute_60.yaml")
+    policy = config["policy"]
+    assert policy["implementation"] == "tcc_mlp_bc_v2_visual_absolute"
+    assert policy["proprioception"] is False
+    assert policy["proprioception_dim"] == 0
+    assert policy["action_representation"] == "absolute"
+    assert "lookahead_frames" not in policy
+    assert "execution_delta_gain" not in policy
+    assert config["backbone"]["hub_name"] == "ours_vit"
+    assert config["model_hub"]["supported_demonstrations"] == [60]
+    assert config["split"] == {
+        "train_episodes_per_task": 60,
+        "validation_episodes_per_task": 20,
+        "test_episodes_per_task": 20,
+        "unused_episodes_per_task": 0,
+    }
+    assert policy["input_batch_norm"] is False
+    assert policy["input_layer_norm"] is True
+    assert policy["loss"] == "smooth_l1"
+    assert config["evaluation"]["max_rollout_steps"] == 359
+    assert "horizon" not in policy
+
+
 def test_model_hub_is_pinned_to_an_immutable_revision() -> None:
     config = load_yaml(ROOT / "configs" / "experiment.yaml")
     hub = config["model_hub"]

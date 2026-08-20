@@ -1,1 +1,2 @@
-python scripts/fetch_policy_assets.py --backbone ours_vit --demonstrations 80
+python scripts/cache_policy_features.py --config configs/experiment_visual_absolute_60.yaml --hub-backbone ours_vit --dataset-root datasets/pick_and_place_4_object_diverse --tcc-source-root /home/robotarm/TCC-core --cache-root runs/feature_cache_v2/ours_vit/60 --device cuda:0
+python scripts/train_policy.py --config configs/experiment_visual_absolute_60.yaml --cache-root runs/feature_cache_v2/ours_vit/60 --output-dir runs/tcc_mlp_bc_v2/ours_vit/60 --device cuda:0

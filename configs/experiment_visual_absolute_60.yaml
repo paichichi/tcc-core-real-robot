@@ -1,0 +1,75 @@
+project: tcc-core-real-robot
+seed: 1
+
+dataset:
+  repository: UoA-Trossen-Arm/pick_and_place_4_object_diverse
+  revision: 6ce893dc73fc6310ccbd46786f71a03a5b6a3da2
+  local_root: datasets/pick_and_place_4_object_diverse
+  demonstrations_per_task: 100
+  tasks:
+    - pick_and_place_carrot_100
+    - pick_and_place_pineapple_100
+    - pick_and_place_starfruit_100
+    - pick_and_place_strawberry_100
+
+observations:
+  fps: 20
+  cameras:
+    - cam_main
+    - cam_wrist
+  resolution: [640, 480]
+
+backbone:
+  source: huggingface
+  hub_name: ours_vit
+  checkpoint: null
+  tcc_source_root: TBD
+  frozen: true
+  image_size: 224
+  feature_cache_dtype: float16
+
+model_hub:
+  repository: Chipaipai/tcc-core-real-robot-policies
+  # Pinned revision currently supplies the frozen backbone. Replace this with
+  # the immutable commit containing the new 60-demo policy after publication.
+  revision: 5ef939242b4bb5d8caef52b83bd09ce8e2ebdb12
+  backbone_manifest: backbones/manifest.json
+  policy_checkpoint_template: policies/{backbone}/{demonstrations}/checkpoint_050000.pt
+  policy_metrics_template: policies/{backbone}/{demonstrations}/metrics.json
+  supported_backbones:
+    - ours_vit
+  supported_demonstrations: [60]
+
+policy:
+  implementation: tcc_mlp_bc_v2_visual_absolute
+  cameras:
+    - cam_main
+    - cam_wrist
+  shared_camera_backbone: true
+  task_conditioning: one_hot
+  number_of_tasks: 4
+  proprioception: false
+  proprioception_dim: 0
+  action_dim: 7
+  action_chunk_size: 1
+  action_representation: absolute
+  hidden_dimensions: [256, 256]
+  activation: relu
+  input_batch_norm: false
+  input_layer_norm: true
+  optimizer: adam
+  loss: smooth_l1
+  training_steps: 50000
+  batch_size: 32
+  learning_rate: 0.001
+  log_every: 1000
+
+evaluation:
+  # Rollout timeout only; the policy predicts one absolute action per frame.
+  max_rollout_steps: 359
+
+split:
+  train_episodes_per_task: 60
+  validation_episodes_per_task: 20
+  test_episodes_per_task: 20
+  unused_episodes_per_task: 0

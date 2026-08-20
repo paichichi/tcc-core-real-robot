@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Train the future-delta TCC-MLP-BC v1 policy from cached features."""
+"""Train a frozen-feature TCC-MLP behavior-cloning policy."""
 
 from __future__ import annotations
 
@@ -15,7 +15,10 @@ import yaml
 from torch import nn
 
 from tcc_real_robot.policy import ActionNormalizer, TCCMLPPolicy
-from tcc_real_robot.policy_data import load_cached_future_delta_split
+from tcc_real_robot.policy_data import (
+    load_cached_future_delta_split,
+    load_cached_split,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -41,12 +44,12 @@ def sample_batch(
 def evaluate_policy(
     model: TCCMLPPolicy,
     normalizer: ActionNormalizer,
-    state_normalizer: ActionNormalizer,
+    state_normalizer: ActionNormalizer | None,
     data: dict[str, torch.Tensor],
     batch_size: int,
     device: torch.device,
 ) -> tuple[float, list[float]]:
-    """Evaluate normalized Huber loss and denormalized delta MAE."""
+    """Evaluate normalized Huber loss and denormalized action-space MAE."""
     model.eval()
     loss_total = 0.0
     absolute_error = torch.zeros(7, device=device)
@@ -54,11 +57,16 @@ def evaluate_policy(
     for start in range(0, examples, batch_size):
         stop = min(start + batch_size, examples)
         batch = {key: value[start:stop].to(device) for key, value in data.items()}
+        proprioception = (
+            state_normalizer.normalize(batch["state"].float())
+            if state_normalizer is not None
+            else None
+        )
         prediction = model(
             batch["cam_main"].float(),
             batch["cam_wrist"].float(),
             batch["task_index"],
-            state_normalizer.normalize(batch["state"].float()),
+            proprioception,
         )
         normalized_target = normalizer.normalize(batch["action"])
         loss = nn.functional.smooth_l1_loss(prediction, normalized_target)
@@ -77,6 +85,22 @@ def main() -> None:
     if not cache_manifest_path.is_file():
         raise FileNotFoundError(cache_manifest_path)
     cache_manifest = json.loads(cache_manifest_path.read_text())
+    if args.episodes_per_task is None:
+        expected_split = {
+            key: int(config["split"][key])
+            for key in (
+                "train_episodes_per_task",
+                "validation_episodes_per_task",
+                "test_episodes_per_task",
+                "unused_episodes_per_task",
+            )
+        }
+        manifest_split = cache_manifest.get("split")
+        if manifest_split != expected_split:
+            raise ValueError(
+                "Feature-cache split does not match the experiment config: "
+                f"{manifest_split} != {expected_split}. Use a clean cache root."
+            )
     seed = int(config["seed"])
     random.seed(seed)
     np.random.seed(seed)
@@ -125,21 +149,36 @@ def main() -> None:
             )
 
     policy_config = config["policy"]
-    if policy_config.get("action_representation") != "future_delta":
-        raise ValueError("MLP v1 requires action_representation=future_delta")
-    if policy_config.get("proprioception") is not True:
-        raise ValueError("MLP v1 requires proprioception")
-    lookahead_frames = int(policy_config["lookahead_frames"])
-    train = load_cached_future_delta_split(
-        args.cache_root,
-        "train",
-        lookahead_frames,
-        episode_ids_by_task=selected_episode_ids,
-    )
-    validation = load_cached_future_delta_split(
-        args.cache_root, "validation", lookahead_frames
-    )
-    test = load_cached_future_delta_split(args.cache_root, "test", lookahead_frames)
+    action_representation = policy_config.get("action_representation", "absolute")
+    uses_proprioception = policy_config.get("proprioception") is True
+    if action_representation == "future_delta":
+        if not uses_proprioception:
+            raise ValueError("future_delta training requires proprioception")
+        lookahead_frames = int(policy_config["lookahead_frames"])
+        train = load_cached_future_delta_split(
+            args.cache_root,
+            "train",
+            lookahead_frames,
+            episode_ids_by_task=selected_episode_ids,
+        )
+        validation = load_cached_future_delta_split(
+            args.cache_root, "validation", lookahead_frames
+        )
+        test = load_cached_future_delta_split(
+            args.cache_root, "test", lookahead_frames
+        )
+    elif action_representation == "absolute":
+        train = load_cached_split(
+            args.cache_root,
+            "train",
+            episode_ids_by_task=selected_episode_ids,
+        )
+        validation = load_cached_split(args.cache_root, "validation")
+        test = load_cached_split(args.cache_root, "test")
+    else:
+        raise ValueError(
+            f"Unsupported action_representation: {action_representation}"
+        )
     feature_dim = int(train["cam_main"].shape[1])
     if train["cam_wrist"].shape[1] != feature_dim:
         raise ValueError("Camera feature dimensions differ")
@@ -149,16 +188,24 @@ def main() -> None:
         num_tasks=int(policy_config["number_of_tasks"]),
         action_dim=int(policy_config["action_dim"]),
         hidden_dims=tuple(policy_config["hidden_dimensions"]),
-        proprio_dim=int(policy_config["proprioception_dim"]),
+        proprio_dim=(
+            int(policy_config.get("proprioception_dim", 7))
+            if uses_proprioception
+            else 0
+        ),
         input_batch_norm=bool(policy_config["input_batch_norm"]),
         input_layer_norm=bool(policy_config["input_layer_norm"]),
     ).to(device)
     action_mean = train["action"].mean(dim=0)
     action_std = train["action"].std(dim=0)
     normalizer = ActionNormalizer(action_mean, action_std).to(device)
-    state_mean = train["state"].mean(dim=0)
-    state_std = train["state"].std(dim=0)
-    state_normalizer = ActionNormalizer(state_mean, state_std).to(device)
+    state_mean: torch.Tensor | None = None
+    state_std: torch.Tensor | None = None
+    state_normalizer: ActionNormalizer | None = None
+    if uses_proprioception:
+        state_mean = train["state"].mean(dim=0)
+        state_std = train["state"].std(dim=0)
+        state_normalizer = ActionNormalizer(state_mean, state_std).to(device)
     optimizer = torch.optim.Adam(
         model.parameters(), lr=float(policy_config["learning_rate"])
     )
@@ -178,11 +225,16 @@ def main() -> None:
     for step in range(1, steps + 1):
         model.train()
         batch = sample_batch(train, batch_size, device)
+        proprioception = (
+            state_normalizer.normalize(batch["state"].float())
+            if state_normalizer is not None
+            else None
+        )
         prediction = model(
             batch["cam_main"].float(),
             batch["cam_wrist"].float(),
             batch["task_index"],
-            state_normalizer.normalize(batch["state"].float()),
+            proprioception,
         )
         loss = loss_function(prediction, normalizer.normalize(batch["action"]))
         optimizer.zero_grad(set_to_none=True)
@@ -198,11 +250,16 @@ def main() -> None:
                 batch_size * 4,
                 device,
             )
+            metric_name = (
+                "validation_delta_mae"
+                if action_representation == "future_delta"
+                else "validation_action_mae"
+            )
             row = {
                 "step": step,
                 "train_normalized_smooth_l1": float(loss.detach()),
                 "validation_normalized_smooth_l1": validation_loss,
-                "validation_delta_mae": validation_mae,
+                metric_name: validation_mae,
             }
             history.append(row)
             print(json.dumps(row, sort_keys=True))
@@ -214,12 +271,10 @@ def main() -> None:
     def checkpoint_payload(
         model_state: dict[str, torch.Tensor], checkpoint_step: int
     ) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "model": model_state,
             "action_mean": action_mean,
             "action_std": action_std,
-            "state_mean": state_mean,
-            "state_std": state_std,
             "feature_dim": feature_dim,
             "feature_cache_manifest": cache_manifest,
             "training_episode_ids": (
@@ -237,6 +292,10 @@ def main() -> None:
             "history": history,
             "actuation_enabled": False,
         }
+        if state_mean is not None and state_std is not None:
+            payload["state_mean"] = state_mean
+            payload["state_std"] = state_std
+        return payload
 
     if best_model_state is None:
         raise RuntimeError("No best validation checkpoint was selected")
@@ -260,12 +319,17 @@ def main() -> None:
         checkpoint_payload(best_model_state, best_step),
         output_dir / f"checkpoint_{steps:06d}.pt",
     )
+    test_metric_name = (
+        "test_delta_mae_at_best"
+        if action_representation == "future_delta"
+        else "test_action_mae_at_best"
+    )
     metrics = {
         "history": history,
         "best_validation_step": best_step,
         "best_validation_normalized_smooth_l1": best_validation_loss,
         "test_normalized_smooth_l1_at_best": test_loss,
-        "test_delta_mae_at_best": test_mae,
+        test_metric_name: test_mae,
     }
     (output_dir / "metrics.json").write_text(json.dumps(metrics, indent=2) + "\n")
 

@@ -1,5 +1,31 @@
 # Real-Robot Policy Training and Evaluation
 
+## 推荐的新实验：ViT、60 demos、纯视觉 absolute action
+
+连续两次 RN50 rollout 和一次 ViT rollout 都在 driver 正常跟踪的情况下走向
+近似固定的错误轨迹。新实验与旧 v1 隔离，使用
+`configs/experiment_visual_absolute_60.yaml`：每个任务固定划分 60 个 train、
+20 个 validation、20 个 test episode；冻结 `ours_vit`，MLP 只输入两路视觉特征
+和 task ID，不输入 proprioception，直接预测与 dataset replay 同语义的 7 维
+absolute action。
+
+必须使用新的 cache root，避免旧 80/10/10 cache 中残留的 episode 混入：
+
+```bash
+python scripts/cache_policy_features.py --config configs/experiment_visual_absolute_60.yaml --hub-backbone ours_vit --dataset-root datasets/pick_and_place_4_object_diverse --tcc-source-root /home/robotarm/TCC-core --cache-root runs/feature_cache_v2/ours_vit/60 --device cuda:0
+```
+
+缓存完成后训练：
+
+```bash
+python scripts/train_policy.py --config configs/experiment_visual_absolute_60.yaml --cache-root runs/feature_cache_v2/ours_vit/60 --output-dir runs/tcc_mlp_bc_v2/ours_vit/60 --device cuda:0
+```
+
+训练脚本会拒绝 split 与配置不一致的 cache。部署前使用 validation 最优的
+`checkpoint_050000.pt`，test 集只在选择完 checkpoint 后评估一次。新 checkpoint
+发布到 Hugging Face 后，必须把新配置中的 `model_hub.revision` 固定为发布 commit，
+再开始 shadow 或实机评估。
+
 当前代码兼容旧的 `tcc_mlp_bc_v0` checkpoint，并提供改进后的
 `tcc_mlp_bc_v1_future_delta`：冻结视觉 backbone，输入两路视觉特征、7 维当前
 机器人状态和任务 ID，预测 10 帧后的状态增量。训练使用按 episode 划分的
