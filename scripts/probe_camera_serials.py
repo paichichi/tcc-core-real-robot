@@ -27,6 +27,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--main-serial", required=True)
     parser.add_argument("--wrist-serial", required=True)
+    parser.add_argument("--main-model", default="D435")
+    parser.add_argument("--wrist-model", default="D405")
     parser.add_argument("--width", type=int, default=640)
     parser.add_argument("--height", type=int, default=480)
     parser.add_argument("--fps", type=float, default=30.0)
@@ -54,40 +56,68 @@ def main() -> None:
     if args.warmup_frames < 0:
         raise SystemExit("--warmup-frames must be non-negative")
 
-    serial_roles = {
-        args.main_serial: "cam_main / D435",
-        args.wrist_serial: "cam_wrist / D405",
-    }
-    candidates = []
+    requested = (
+        ("cam_main / D435", args.main_serial, args.main_model),
+        ("cam_wrist / D405", args.wrist_serial, args.wrist_model),
+    )
+    inventory = []
     discovered = []
     for device in sorted(glob.glob("/dev/video*"), key=video_number):
         properties = udev_properties(device)
         usb_identity = sysfs_usb_identity(device)
+        product = usb_identity.get(
+            "SYSFS_USB_PRODUCT", properties.get("ID_V4L_PRODUCT", "UNAVAILABLE")
+        )
+        inventory.append((device, properties, usb_identity, product))
         discovered.append(
             (
                 device,
                 properties.get("ID_SERIAL_SHORT", "UNAVAILABLE"),
                 usb_identity.get("SYSFS_USB_SERIAL", "UNAVAILABLE"),
-                usb_identity.get("SYSFS_USB_PRODUCT", "UNAVAILABLE"),
+                product,
             )
         )
-        for serial, role in serial_roles.items():
-            if matches_serial(properties, usb_identity, serial):
-                candidates.append((device, serial, role, properties))
-                break
 
-    missing = [
-        serial
-        for serial in serial_roles
-        if not any(candidate[1] == serial for candidate in candidates)
-    ]
+    candidates = []
+    missing = []
+    for role, serial, model in requested:
+        role_matches = [
+            row for row in inventory if matches_serial(row[1], row[2], serial)
+        ]
+        resolution = "serial"
+        if not role_matches:
+            role_matches = [
+                row for row in inventory if model.lower() in row[3].lower()
+            ]
+            resolution = "unique-model-and-physical-path fallback"
+            physical_paths = {
+                row[2].get("SYSFS_USB_PATH", "UNAVAILABLE") for row in role_matches
+            }
+            if len(physical_paths) != 1:
+                role_matches = []
+        if not role_matches:
+            missing.append(f"{role}: serial={serial}, model={model}")
+            continue
+        for device, properties, usb_identity, product in role_matches:
+            candidates.append(
+                (
+                    device,
+                    serial,
+                    role,
+                    properties,
+                    usb_identity,
+                    product,
+                    resolution,
+                )
+            )
+
     if missing:
         details = "; ".join(
             f"{device}: udev={udev_serial}, sysfs={sysfs_serial}, product={product}"
             for device, udev_serial, sysfs_serial, product in discovered
         )
         raise RuntimeError(
-            f"No V4L2 nodes found for serials: {missing}. Discovered: {details}"
+            f"No unique V4L2 device found for: {missing}. Discovered: {details}"
         )
 
     frames = []
@@ -97,7 +127,15 @@ def main() -> None:
         "Robot connection: DISABLED",
         "",
     ]
-    for device, serial, role, properties in candidates:
+    for (
+        device,
+        serial,
+        role,
+        properties,
+        usb_identity,
+        product,
+        resolution,
+    ) in candidates:
         capabilities = properties.get("ID_V4L_CAPABILITIES", "UNAVAILABLE")
         image, status = capture_node(
             device,
@@ -107,20 +145,28 @@ def main() -> None:
             args.warmup_frames,
         )
         path = properties.get("ID_PATH", "UNAVAILABLE")
-        label = f"{role} {serial} {device}"
+        usb_path = usb_identity.get("SYSFS_USB_PATH", "UNAVAILABLE")
+        observed_serial = usb_identity.get("SYSFS_USB_SERIAL", "UNAVAILABLE")
+        label = f"{role} {device} {resolution}"
         frames.append(label_frame(image, label, status))
         rows.extend(
             (
                 f"role: {role}",
-                f"serial: {serial}",
+                f"requested_serial: {serial}",
+                f"observed_usb_serial: {observed_serial}",
+                f"product: {product}",
+                f"resolution_method: {resolution}",
                 f"device: {device}",
                 f"physical_path: {path}",
+                f"sysfs_usb_path: {usb_path}",
                 f"capabilities: {capabilities}",
                 f"status: {status}",
                 "",
             )
         )
-        print(f"{label}: {status}")
+        print(
+            f"{label}: observed_usb_serial={observed_serial}, status={status}"
+        )
 
     sheet = build_contact_sheet(frames, 2, args.width, args.height)
     args.output_dir.mkdir(parents=True, exist_ok=True)

@@ -37,11 +37,15 @@ action_contract:
 cameras:
   cam_main:
     model: Intel RealSense D435
-    serial: "838212073584"
+    realsense_viewer_serial: "838212073584"
+    usb_serial: UNAVAILABLE
+    physical_path: UNRESOLVED
     v4l2_node: UNRESOLVED
   cam_wrist:
     model: Intel RealSense D405
-    serial: "409122274608"
+    realsense_viewer_serial: "409122274608"
+    usb_serial: "242623072067"
+    physical_path: UNRESOLVED
     v4l2_node: UNRESOLVED
 
 safety:
