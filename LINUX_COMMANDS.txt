@@ -1,4 +1,2 @@
-cd /home/robotarm/tcc-core-real-robot
-source .venv/bin/activate
-python scripts/cache_policy_features.py --hub-backbone ours_rn50 --dataset-root datasets/pick_and_place_4_object_diverse --tcc-source-root /home/robotarm/TCC-core --cache-root runs/feature_cache/ours_rn50 --device cuda:0
-python scripts/train_policy.py --cache-root runs/feature_cache/ours_rn50 --output-dir runs/tcc_mlp_bc_v1/ours_rn50/80 --device cuda:0
+python scripts/fetch_policy_assets.py --backbone ours_rn50 --demonstrations 80
+python scripts/run_policy.py --execute-policy --emergency-stop-ready --backbone ours_rn50 --demonstrations 80
