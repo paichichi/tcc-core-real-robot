@@ -35,6 +35,15 @@ def test_initial_revision_disables_actuation() -> None:
         0.02,
         0.001,
     ]
+    assert clipped["max_command_lead"] == [
+        0.12,
+        0.12,
+        0.12,
+        0.12,
+        0.12,
+        0.12,
+        0.006,
+    ]
     assert clipped["max_tracking_error"] == [
         0.02,
         0.02,

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from math import isfinite
 from typing import Any, Self
 
+from tcc_real_robot.continuous_control import StatefulPositionLimiter
 from tcc_real_robot.driver_config import apply_motor_parameters, validate_versions
 
 
@@ -32,6 +33,8 @@ class BoundedPolicyStep:
     observed: tuple[float, ...]
     max_commanded_arm_delta_rad: float
     commanded_gripper_delta_m: float
+    max_arm_command_lead_rad: float
+    gripper_command_lead_m: float
     max_arm_command_gap_rad: float
     gripper_command_gap_m: float
     sampled_at_monotonic: float
@@ -63,6 +66,8 @@ class PolicyHomeSession:
         self.configured = False
         self.arm_mode_requested = False
         self.gripper_mode_requested = False
+        self.joint_position_limits: tuple[tuple[float, float], ...] | None = None
+        self.policy_limiter: StatefulPositionLimiter | None = None
 
     def prepare(self) -> HomePreparation:
         robot = self.config["robot"]
@@ -110,6 +115,10 @@ class PolicyHomeSession:
                     raise RuntimeError(
                         f"Dataset home target {index}={target} is outside limits"
                     )
+            self.joint_position_limits = tuple(
+                (float(limit.position_min), float(limit.position_max))
+                for limit in limits
+            )
 
             self.driver.set_arm_modes(self.driver_api.Mode.position)
             self.arm_mode_requested = True
@@ -207,7 +216,7 @@ class PolicyHomeSession:
         absolute_min: list[float] | None = None,
         absolute_max: list[float] | None = None,
     ) -> BoundedPolicyStep:
-        """Execute exactly one policy step after clipping it around current state."""
+        """Execute one statefully limited, non-blocking absolute-policy command."""
         if self.driver is None or not self.configured:
             raise RuntimeError("Home session is not connected")
         if len(raw_target) != 7 or not all(isfinite(value) for value in raw_target):
@@ -228,6 +237,7 @@ class PolicyHomeSession:
 
         settings = self.config["policy_evaluation"]["clipped_rollout"]
         max_action_delta = [float(value) for value in settings["max_action_delta"]]
+        max_command_lead = [float(value) for value in settings["max_command_lead"]]
         max_cumulative_arm_delta = float(
             settings.get("max_cumulative_joint_delta_rad", float("inf"))
         )
@@ -246,6 +256,8 @@ class PolicyHomeSession:
         if (
             len(max_action_delta) != 7
             or any(value <= 0 for value in max_action_delta)
+            or len(max_command_lead) != 7
+            or any(value <= 0 for value in max_command_lead)
             or len(max_tracking_error) != 7
             or any(value <= 0 for value in max_tracking_error)
             or (
@@ -265,30 +277,52 @@ class PolicyHomeSession:
 
         start = self.read_positions()
         sampled_at = time.monotonic()
-        limits = self.driver.get_joint_limits()
-        if len(limits) != 7:
-            raise RuntimeError("Expected seven controller joint limits")
-        commanded: list[float] = []
-        for index, (current, target, limit) in enumerate(
-            zip(start, raw_target, limits, strict=True)
-        ):
-            maximum_delta = max_action_delta[index]
-            maximum_cumulative_delta = (
-                max_cumulative_arm_delta
-                if index < 6
-                else max_cumulative_gripper_delta
-            )
-            delta = max(-maximum_delta, min(maximum_delta, target - current))
-            bounded = current + delta
+        if self.joint_position_limits is None:
+            raise RuntimeError("Controller joint limits were not cached during prepare")
+        if self.policy_limiter is None:
             if use_absolute_limits:
-                bounded = max(absolute_min[index], bounded)
-                bounded = min(absolute_max[index], bounded)
+                configured_low = absolute_min
+                configured_high = absolute_max
             else:
-                bounded = max(reference[index] - maximum_cumulative_delta, bounded)
-                bounded = min(reference[index] + maximum_cumulative_delta, bounded)
-            bounded = max(float(limit.position_min), bounded)
-            bounded = min(float(limit.position_max), bounded)
-            commanded.append(bounded)
+                configured_low = [
+                    value
+                    - (
+                        max_cumulative_arm_delta
+                        if index < 6
+                        else max_cumulative_gripper_delta
+                    )
+                    for index, value in enumerate(reference)
+                ]
+                configured_high = [
+                    value
+                    + (
+                        max_cumulative_arm_delta
+                        if index < 6
+                        else max_cumulative_gripper_delta
+                    )
+                    for index, value in enumerate(reference)
+                ]
+            lower_bounds = [
+                max(configured, controller[0])
+                for configured, controller in zip(
+                    configured_low, self.joint_position_limits, strict=True
+                )
+            ]
+            upper_bounds = [
+                min(configured, controller[1])
+                for configured, controller in zip(
+                    configured_high, self.joint_position_limits, strict=True
+                )
+            ]
+            self.policy_limiter = StatefulPositionLimiter(
+                start,
+                lower_bounds=lower_bounds,
+                upper_bounds=upper_bounds,
+                maximum_steps=max_action_delta,
+                maximum_leads=max_command_lead,
+            )
+        limited = self.policy_limiter.limit(raw_target, start)
+        commanded = list(limited.commanded)
 
         # Match Trossen's official LeRobot follower implementation: policy
         # commands are non-blocking so the outer loop can keep its control rate.
@@ -310,10 +344,13 @@ class PolicyHomeSession:
             commanded=tuple(commanded),
             observed=tuple(observed),
             max_commanded_arm_delta_rad=max(
-                abs(target - current)
-                for target, current in zip(commanded[:6], start[:6], strict=True)
+                abs(value) for value in limited.command_step[:6]
             ),
-            commanded_gripper_delta_m=abs(commanded[6] - start[6]),
+            commanded_gripper_delta_m=abs(limited.command_step[6]),
+            max_arm_command_lead_rad=max(
+                abs(value) for value in limited.command_lead[:6]
+            ),
+            gripper_command_lead_m=abs(limited.command_lead[6]),
             max_arm_command_gap_rad=arm_command_gap,
             gripper_command_gap_m=gripper_command_gap,
             sampled_at_monotonic=sampled_at,
@@ -390,6 +427,8 @@ class PolicyHomeSession:
                 except Exception as exc:  # noqa: BLE001 - report after all attempts
                     if first_error is None:
                         first_error = exc
+        self.policy_limiter = None
+        self.joint_position_limits = None
         if first_error is not None:
             raise first_error
 

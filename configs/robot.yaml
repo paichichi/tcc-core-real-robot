@@ -78,6 +78,10 @@ policy_evaluation:
     max_steps: 359
     max_action_delta:
       [0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.001]
+    # Six 20 Hz command periods fit inside the official 0.3 s interpolation.
+    # This caps how far the command stream may run ahead of measured motion.
+    max_command_lead:
+      [0.12, 0.12, 0.12, 0.12, 0.12, 0.12, 0.006]
     dataset_action_limits:
       pick_and_place_carrot_100:
         min: [-0.6322957, 0.5960556, 0.5220493, -1.5905623, -0.2038987, -0.9504463, -0.0004923]

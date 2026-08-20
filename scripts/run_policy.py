@@ -461,6 +461,13 @@ def main() -> None:
             )
             report.write("Policy command blocking: False (official continuous mode)\n")
             report.write(f"Policy command goal time: {goal_time:.3f} s\n")
+            report.write(
+                "Policy command shaping: stateful previous-command slew with "
+                "measured-position lead cap\n"
+            )
+            report.write(
+                f"Policy maximum command lead: {clipped['max_command_lead']}\n"
+            )
         report.write(f"Inference warmup steps: {inference_warmup_steps}\n")
         report.write(f"Maximum steps: {max_steps}\n\n")
         if dataset_action_min is not None and dataset_action_max is not None:
@@ -687,6 +694,10 @@ def main() -> None:
                             f"{bounded_step.max_commanded_arm_delta_rad:.7f}\n"
                             f"step={step:03d} commanded_gripper_delta_m="
                             f"{bounded_step.commanded_gripper_delta_m:.7f}\n"
+                            f"step={step:03d} commanded_max_arm_lead_rad="
+                            f"{bounded_step.max_arm_command_lead_rad:.7f}\n"
+                            f"step={step:03d} commanded_gripper_lead_m="
+                            f"{bounded_step.gripper_command_lead_m:.7f}\n"
                             f"step={step:03d} arm_immediate_command_gap_rad="
                             f"{bounded_step.max_arm_command_gap_rad:.7f}\n"
                             f"step={step:03d} gripper_immediate_command_gap_m="
@@ -806,6 +817,18 @@ def main() -> None:
                         "commanded_gripper_delta_safe": bool(bounded_steps)
                         and max(item.commanded_gripper_delta_m for item in bounded_steps)
                         <= float(clipped["max_action_delta"][6]) + 1e-9,
+                        "command_lead_safe": bool(bounded_steps)
+                        and all(
+                            item.max_arm_command_lead_rad
+                            <= max(
+                                float(value)
+                                for value in clipped["max_command_lead"][:6]
+                            )
+                            + 1e-9
+                            and item.gripper_command_lead_m
+                            <= float(clipped["max_command_lead"][6]) + 1e-9
+                            for item in bounded_steps
+                        ),
                         "official_nonblocking_commands": clipped["command_blocking"]
                         is False,
                         "observed_arm_velocity_safe": max_observed_arm_velocity
@@ -830,6 +853,7 @@ def main() -> None:
                     "clipped_rollout_completed",
                     "commanded_arm_delta_safe",
                     "commanded_gripper_delta_safe",
+                    "command_lead_safe",
                     "official_nonblocking_commands",
                     "observed_arm_velocity_safe",
                     "observed_gripper_velocity_safe",

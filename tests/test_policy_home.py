@@ -123,6 +123,7 @@ def make_config() -> dict:
             "clipped_rollout": {
                 "max_steps": 3,
                 "max_action_delta": [0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.001],
+                "max_command_lead": [0.06, 0.06, 0.06, 0.06, 0.06, 0.06, 0.003],
                 "max_cumulative_joint_delta_rad": 0.06,
                 "max_cumulative_gripper_delta_m": 0.003,
                 "control_fps": 20.0,
@@ -215,6 +216,40 @@ def test_bounded_policy_steps_stop_at_cumulative_home_envelope() -> None:
 
     assert result.commanded[:6] == pytest.approx([0.06, 1.06, 0.56, 0.66, 0.06, 0.06])
     assert result.commanded[6] == pytest.approx(0.003)
+    session.close()
+
+
+def test_bounded_policy_commands_advance_while_measurement_lags() -> None:
+    driver = FakeHomeDriver()
+    session = PolicyHomeSession(make_api(driver), make_config(), timeout=20.0)
+    preparation = session.prepare()
+    reference = list(preparation.observed)
+
+    # Simulate a non-blocking controller whose measured state has not caught up.
+    original_set_all_positions = driver.set_all_positions
+
+    def record_without_motion(
+        target: list[float], goal_time: float, blocking: bool
+    ) -> None:
+        arm_before = driver.arm.copy()
+        gripper_before = driver.gripper
+        original_set_all_positions(target, goal_time, blocking)
+        driver.arm = arm_before
+        driver.gripper = gripper_before
+
+    driver.set_all_positions = record_without_motion  # type: ignore[method-assign]
+    results = [
+        session.execute_bounded_policy_step([3.0] * 7, reference)
+        for _ in range(4)
+    ]
+
+    assert [result.commanded[0] for result in results] == pytest.approx(
+        [0.02, 0.04, 0.06, 0.06]
+    )
+    assert all(
+        result.max_commanded_arm_delta_rad <= 0.02 + 1e-9
+        for result in results
+    )
     session.close()
 
 
