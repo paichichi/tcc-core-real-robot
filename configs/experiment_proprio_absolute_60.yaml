@@ -28,9 +28,8 @@ backbone:
 
 model_hub:
   repository: Chipaipai/tcc-core-real-robot-policies
-  # This revision supplies the frozen backbones only during v3 training.
-  # Do not deploy with this config until a v3 policy release is pinned here.
-  revision: 1b104dfdd7b41d9619c0b128ccf321e77a03469a
+  # Immutable release containing the frozen backbone and ViT v3 policy.
+  revision: a3893828ecb96c2dc040b28c9eb1aa552ce706fb
   backbone_manifest: backbones/manifest.json
   policy_checkpoint_template: policies/{backbone}/{demonstrations}/checkpoint_050000.pt
   policy_metrics_template: policies/{backbone}/{demonstrations}/metrics.json

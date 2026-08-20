@@ -14,8 +14,9 @@ train split 统计量归一化的 7-D 当前机器人状态，直接预测 7-D a
 lead 和速度限制。报告同时保留 `raw_action` 与过滤后的 `action`，首帧安全检查仍使用
 raw policy，EMA 不会掩盖不安全 checkpoint。
 
-在 v3 policy 上传并固定新的 Hugging Face commit 前，不要用 v3 配置执行机械臂；
-runtime contract 检查会拒绝把旧 v2 checkpoint 当成 v3。
+ViT v3 policy 已固定到 Hugging Face commit
+`a3893828ecb96c2dc040b28c9eb1aa552ce706fb`。runtime contract 检查会拒绝把旧 v2
+checkpoint 当成 v3。
 
 ## 已完成的 v2 实验：ViT、60 demos、纯视觉 absolute action
 
