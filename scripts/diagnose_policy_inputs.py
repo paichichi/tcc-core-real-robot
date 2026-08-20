@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -42,14 +43,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--demonstrations", type=int, default=60)
     parser.add_argument("--task", default="carrot")
     parser.add_argument("--episodes", type=int, default=10)
-    parser.add_argument("--cam-main", required=True)
-    parser.add_argument("--cam-wrist", required=True)
+    parser.add_argument(
+        "--camera-backend",
+        choices=("realsense-sdk", "v4l2"),
+        default="realsense-sdk",
+    )
+    parser.add_argument("--cam-main-serial")
+    parser.add_argument("--cam-wrist-serial")
+    parser.add_argument("--cam-main")
+    parser.add_argument("--cam-wrist")
     parser.add_argument("--tcc-source-root", type=Path, required=True)
     parser.add_argument("--hub-cache-dir", type=Path)
     parser.add_argument("--offline", action="store_true")
     parser.add_argument("--device", default="auto")
     parser.add_argument("--controller-timeout", type=float, default=20.0)
     parser.add_argument("--warmup-frames", type=int, default=10)
+    parser.add_argument("--profile-steps", type=int, default=20)
+    parser.add_argument("--execute-home", action="store_true")
     parser.add_argument("--emergency-stop-ready", action="store_true")
     parser.add_argument("--output-dir", type=Path, default=Path("outputs"))
     return parser.parse_args()
@@ -139,15 +149,29 @@ def main() -> None:
         raise SystemExit("--episodes must be positive")
     if args.warmup_frames < 0:
         raise SystemExit("--warmup-frames must be non-negative")
-    if not args.emergency_stop_ready:
+    if args.profile_steps <= 0:
+        raise SystemExit("--profile-steps must be positive")
+    if args.execute_home and not args.emergency_stop_ready:
         raise SystemExit(
-            "Home staging requires --emergency-stop-ready; policy actions remain disabled"
+            "--execute-home requires --emergency-stop-ready; policy actions remain disabled"
         )
 
     import pyarrow.parquet as pq
 
     config = load_yaml(args.config)
     robot_config = load_yaml(args.robot_config)
+    if args.camera_backend == "realsense-sdk":
+        configured_cameras = robot_config["cameras"]
+        args.cam_main_serial = args.cam_main_serial or str(
+            configured_cameras["cam_main"]["serial_number"]
+        )
+        args.cam_wrist_serial = args.cam_wrist_serial or str(
+            configured_cameras["cam_wrist"]["serial_number"]
+        )
+        if args.cam_main_serial == args.cam_wrist_serial:
+            raise SystemExit("Main and wrist RealSense serials must be distinct")
+    elif not args.cam_main or not args.cam_wrist:
+        raise SystemExit("--camera-backend v4l2 requires --cam-main and --cam-wrist")
     dataset_root = resolve_dataset_root(config, args.dataset_root)
     task_names = [str(value) for value in config["dataset"]["tasks"]]
     task_index, task_name = resolve_task(args.task, task_names)
@@ -191,33 +215,63 @@ def main() -> None:
     width, height = [int(value) for value in config["observations"]["resolution"]]
     camera_fps = float(robot_config["policy_evaluation"]["camera_capture_fps"])
 
-    try:
-        import trossen_arm
-    except ImportError as exc:
-        raise RuntimeError("Install the robot dependencies with pip install -e '.[robot]'") from exc
+    if args.execute_home:
+        try:
+            import trossen_arm
+        except ImportError as exc:
+            raise RuntimeError(
+                "Install the robot dependencies with pip install -e '.[robot]'"
+            ) from exc
+        home_session = PolicyHomeSession(
+            trossen_arm, robot_config, args.controller_timeout
+        )
+        try:
+            preparation = home_session.prepare()
+            home = np.asarray(preparation.observed, dtype=np.float64)
+        finally:
+            home_session.close()
+    else:
+        robot = robot_config["robot"]
+        home = np.asarray(
+            [*robot["home_arm_positions_rad"], robot["home_gripper_position_m"]],
+            dtype=np.float64,
+        )
 
-    home_session = PolicyHomeSession(
-        trossen_arm, robot_config, args.controller_timeout
-    )
-    try:
-        preparation = home_session.prepare()
-        with SynchronizedCameras(
+    if args.camera_backend == "realsense-sdk":
+        try:
+            import pyrealsense2 as rs
+        except ImportError as exc:
+            raise RuntimeError(
+                "pyrealsense2 is required for the RealSense SDK backend"
+            ) from exc
+        from tcc_real_robot.realsense_cameras import RealSenseColorCameras
+
+        if not camera_fps.is_integer():
+            raise RuntimeError("RealSense SDK capture FPS must be a whole number")
+        camera_context = RealSenseColorCameras(
+            rs,
+            args.cam_main_serial,
+            args.cam_wrist_serial,
+            width,
+            height,
+            int(camera_fps),
+        )
+    else:
+        camera_context = SynchronizedCameras(
             cv2,
             args.cam_main,
             args.cam_wrist,
             width,
             height,
             camera_fps,
-        ) as cameras:
-            for _ in range(args.warmup_frames):
-                cameras.read_rgb_pair()
-            live_main, live_wrist = cameras.read_rgb_pair()
-            camera_properties = (cameras.main_properties, cameras.wrist_properties)
-            pair_skew_ms = cameras.last_pair_skew_ms
-    finally:
-        home_session.close()
+        )
+    with camera_context as cameras:
+        for _ in range(args.warmup_frames):
+            cameras.read_rgb_pair()
+        live_main, live_wrist = cameras.read_rgb_pair()
+        camera_properties = (cameras.main_properties, cameras.wrist_properties)
+        pair_skew_ms = cameras.last_pair_skew_ms
 
-    home = np.asarray(preparation.observed, dtype=np.float64)
     image_size = int(backbone_metadata["image_size"])
     live_prediction = (
         predict_action(
@@ -232,6 +286,23 @@ def main() -> None:
         .numpy()
         .astype(np.float64)
     )
+    profile_latencies_ms = []
+    for _ in range(args.profile_steps):
+        if device.type == "cuda":
+            torch.cuda.synchronize(device)
+        profile_started = time.perf_counter()
+        predict_action(
+            backbone,
+            bundle,
+            live_main,
+            live_wrist,
+            task_index,
+            image_size,
+            device,
+        )
+        if device.type == "cuda":
+            torch.cuda.synchronize(device)
+        profile_latencies_ms.append((time.perf_counter() - profile_started) * 1000.0)
     swapped_prediction = (
         predict_action(
             backbone,
@@ -271,14 +342,10 @@ def main() -> None:
         demo_main_feature = features[2 + index * 2]
         demo_wrist_feature = features[3 + index * 2]
         row["main_similarity"] = float(
-            torch_f.cosine_similarity(
-                live_main_feature, demo_main_feature, dim=0
-            )
+            torch_f.cosine_similarity(live_main_feature, demo_main_feature, dim=0)
         )
         row["wrist_similarity"] = float(
-            torch_f.cosine_similarity(
-                live_wrist_feature, demo_wrist_feature, dim=0
-            )
+            torch_f.cosine_similarity(live_wrist_feature, demo_wrist_feature, dim=0)
         )
         row["normal_similarity"] = float(
             (row["main_similarity"] + row["wrist_similarity"]) / 2.0
@@ -440,12 +507,8 @@ def main() -> None:
 
     normal_arm_delta, normal_gripper_delta = action_delta(live_prediction, home)
     swapped_arm_delta, swapped_gripper_delta = action_delta(swapped_prediction, home)
-    live_main_demo_wrist_delta = action_delta(
-        live_main_demo_wrist_prediction, home
-    )
-    demo_main_live_wrist_delta = action_delta(
-        demo_main_live_wrist_prediction, home
-    )
+    live_main_demo_wrist_delta = action_delta(live_main_demo_wrist_prediction, home)
+    demo_main_live_wrist_delta = action_delta(demo_main_live_wrist_prediction, home)
     matched_both_delta = action_delta(matched_both_prediction, home)
     matched_main_delta = action_delta(matched_main_prediction, home)
     matched_wrist_delta = action_delta(matched_wrist_prediction, home)
@@ -454,14 +517,32 @@ def main() -> None:
         report.write("Live Policy Input Diagnostic\n")
         report.write("============================\n")
         report.write("Policy actuation: DISABLED\n")
-        report.write("Robot movement: dataset-home staging only\n")
+        report.write(
+            "Robot movement: "
+            + ("dataset-home staging only\n" if args.execute_home else "DISABLED\n")
+        )
         report.write(f"Task: {task_name}\n")
         report.write(f"Backbone: {args.backbone}\n")
         report.write(f"Policy SHA256: {assets.policy_sha256}\n")
-        report.write(f"Camera main: {args.cam_main} {camera_properties[0]}\n")
-        report.write(f"Camera wrist: {args.cam_wrist} {camera_properties[1]}\n")
+        report.write(f"Camera backend: {args.camera_backend}\n")
+        report.write(f"Camera main: {camera_properties[0]}\n")
+        report.write(f"Camera wrist: {camera_properties[1]}\n")
         report.write(f"Camera pair skew: {pair_skew_ms:.3f} ms\n")
-        report.write(f"Home observed: {home.tolist()}\n\n")
+        report.write(
+            f"Home {'observed' if args.execute_home else 'configured reference'}: "
+            f"{home.tolist()}\n\n"
+        )
+        report.write(f"Inference profile steps: {args.profile_steps}\n")
+        report.write(
+            "Inference latency median/p95/max: "
+            f"{float(np.median(profile_latencies_ms)):.3f} / "
+            f"{float(np.percentile(profile_latencies_ms, 95)):.3f} / "
+            f"{max(profile_latencies_ms):.3f} ms\n"
+        )
+        report.write(
+            "Inference rate from median latency: "
+            f"{1000.0 / float(np.median(profile_latencies_ms)):.3f} Hz\n\n"
+        )
         report.write(f"Live normal prediction: {live_prediction.tolist()}\n")
         report.write(f"Live normal maximum arm delta: {normal_arm_delta:.7f} rad\n")
         report.write(f"Live normal gripper delta: {normal_gripper_delta:.7f} m\n")
@@ -493,24 +574,20 @@ def main() -> None:
             f"{demo_main_live_wrist_delta[1]:.7f} m\n\n"
         )
         report.write(
-            "Color-matched both prediction: "
-            f"{matched_both_prediction.tolist()}\n"
+            f"Color-matched both prediction: {matched_both_prediction.tolist()}\n"
         )
         report.write(
-            "Color-matched both maximum arm delta: "
-            f"{matched_both_delta[0]:.7f} rad\n"
+            f"Color-matched both maximum arm delta: {matched_both_delta[0]:.7f} rad\n"
         )
         report.write(
-            "Color-matched both gripper delta: "
-            f"{matched_both_delta[1]:.7f} m\n"
+            f"Color-matched both gripper delta: {matched_both_delta[1]:.7f} m\n"
         )
         report.write(
             "Color-matched main-only maximum arm delta: "
             f"{matched_main_delta[0]:.7f} rad\n"
         )
         report.write(
-            "Color-matched main-only gripper delta: "
-            f"{matched_main_delta[1]:.7f} m\n"
+            f"Color-matched main-only gripper delta: {matched_main_delta[1]:.7f} m\n"
         )
         report.write(
             "Color-matched wrist-only maximum arm delta: "
