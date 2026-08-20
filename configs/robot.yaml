@@ -78,12 +78,16 @@ policy_evaluation:
     # Permit an explicitly requested rollout beyond the 359-frame dataset
     # horizon for diagnostics. All action and tracking limits remain active.
     max_steps: 900
+    # Per-frame maxima measured from the successful 359-frame, 20 Hz replay
+    # of pick_and_place_carrot_100 episode 33. A uniform 0.02 rad cap limited
+    # the policy to about 0.4 rad/s, while the demonstration reaches 1.228
+    # rad/s on joint 3.
     max_action_delta:
-      [0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.001]
+      [0.02517738938331604, 0.041199326515197754, 0.046158552169799805, 0.06141754984855652, 0.036621651612222195, 0.06027315557003021, 0.0026736659929156303]
     # Six 20 Hz command periods fit inside the official 0.3 s interpolation.
     # This caps how far the command stream may run ahead of measured motion.
     max_command_lead:
-      [0.12, 0.12, 0.12, 0.12, 0.12, 0.12, 0.006]
+      [0.15106433629989624, 0.24719595909118652, 0.27695131301879883, 0.3685052990913391, 0.21972990967333317, 0.3616389334201813, 0.016041995957493782]
     dataset_action_limits:
       pick_and_place_carrot_100:
         min: [-0.6322957, 0.5960556, 0.5220493, -1.5905623, -0.2038987, -0.9504463, -0.0004923]

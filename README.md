@@ -26,7 +26,9 @@ python scripts/train_policy.py --cache-root runs/feature_cache/ours_rn50 --outpu
 
 10 帧 future delta 对应数据集 20 Hz 下的 0.5 秒目标。执行时使用 `0.1` gain
 转换成一个 20 Hz 控制步，随后仍经过现有 driver 的逐步、累计、关节和 workspace
-限制。
+限制。逐关节单步上限取自成功执行的 episode 33 replay 实测最大值，而不是统一的
+`0.02 rad`；因此 policy 控制路径允许复现 replay 的运动时间尺度，同时运行时仍限制
+机械臂速度不超过 `1.5 rad/s`、夹爪速度不超过 `0.06 m/s`。
 
 ## 执行已发布的 policy
 
@@ -40,7 +42,10 @@ python scripts/run_policy.py --execute-policy --emergency-stop-ready
 需要临时覆盖时可追加参数，例如 `--max-steps 30`、`--task pineapple` 或
 `--online`。
 
-数据集标准 rollout 长度仍为 359 步。为了诊断末段行为，真实 clipped rollout
+数据集标准 rollout 长度仍为 359 步。成功 replay 的逐帧最大关节速度为
+`[0.504, 0.824, 0.923, 1.228, 0.732, 1.205] rad/s`；policy limiter 使用同一条
+replay 的逐关节最大 step，并根据官方 `0.3 s` 非阻塞插值保留六帧 command lead。
+为了诊断末段行为，真实 clipped rollout
 允许显式扩展到最多 900 步；动作范围、单步变化、command lead、workspace 和
 tracking 限制不会解除：
 

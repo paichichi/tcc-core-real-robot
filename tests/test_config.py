@@ -27,22 +27,26 @@ def test_initial_revision_disables_actuation() -> None:
     clipped = config["policy_evaluation"]["clipped_rollout"]
     assert clipped["max_steps"] == 900
     assert clipped["max_action_delta"] == [
-        0.02,
-        0.02,
-        0.02,
-        0.02,
-        0.02,
-        0.02,
-        0.001,
+        0.02517738938331604,
+        0.041199326515197754,
+        0.046158552169799805,
+        0.06141754984855652,
+        0.036621651612222195,
+        0.06027315557003021,
+        0.0026736659929156303,
     ]
     assert clipped["max_command_lead"] == [
-        0.12,
-        0.12,
-        0.12,
-        0.12,
-        0.12,
-        0.12,
-        0.006,
+        0.15106433629989624,
+        0.24719595909118652,
+        0.27695131301879883,
+        0.3685052990913391,
+        0.21972990967333317,
+        0.3616389334201813,
+        0.016041995957493782,
+    ]
+    assert clipped["max_command_lead"] == [
+        value * clipped["min_time_to_move_multiplier"]
+        for value in clipped["max_action_delta"]
     ]
     assert clipped["max_tracking_error"] == [
         0.02,
