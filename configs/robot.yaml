@@ -54,7 +54,7 @@ policy_evaluation:
   inference_warmup_steps: 3
   minimum_observed_rate_hz: 18.0
   clipped_rollout:
-    max_steps: 20
+    max_steps: 5
     max_action_delta:
       [0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.001]
     dataset_action_limits:
@@ -63,6 +63,7 @@ policy_evaluation:
         max: [0.6002518, 2.5183108, 2.3691540, 0.6891356, 0.5243381, 0.8939880, 0.0404405]
     control_fps: 20.0
     min_time_to_move_multiplier: 6.0
+    command_blocking: false
     max_tracking_error:
       [0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.001]
 

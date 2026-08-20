@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from math import isfinite
 from typing import Any, Self
@@ -31,6 +32,17 @@ class BoundedPolicyStep:
     observed: tuple[float, ...]
     max_commanded_arm_delta_rad: float
     commanded_gripper_delta_m: float
+    max_arm_command_gap_rad: float
+    gripper_command_gap_m: float
+    sampled_at_monotonic: float
+
+
+@dataclass(frozen=True)
+class PolicyTargetVerification:
+    """Final tracking result after the last non-blocking command settles."""
+
+    target: tuple[float, ...]
+    observed: tuple[float, ...]
     max_arm_tracking_error_rad: float
     gripper_tracking_error_m: float
 
@@ -226,6 +238,7 @@ class PolicyHomeSession:
         min_time_to_move_multiplier = float(
             settings["min_time_to_move_multiplier"]
         )
+        command_blocking = settings["command_blocking"]
         goal_time = min_time_to_move_multiplier / control_fps
         max_tracking_error = [
             float(value) for value in settings["max_tracking_error"]
@@ -246,10 +259,12 @@ class PolicyHomeSession:
             or control_fps <= 0
             or min_time_to_move_multiplier <= 0
             or goal_time <= 0.2
+            or command_blocking is not False
         ):
             raise ValueError("Clipped single-step limits and goal time are invalid")
 
         start = self.read_positions()
+        sampled_at = time.monotonic()
         limits = self.driver.get_joint_limits()
         if len(limits) != 7:
             raise RuntimeError("Expected seven controller joint limits")
@@ -275,30 +290,16 @@ class PolicyHomeSession:
             bounded = min(float(limit.position_max), bounded)
             commanded.append(bounded)
 
-        self.driver.set_all_positions(commanded, goal_time, True)
+        # Match Trossen's official LeRobot follower implementation: policy
+        # commands are non-blocking so the outer loop can keep its control rate.
+        self.driver.set_all_positions(commanded, goal_time, False)
         observed = self.read_positions()
-        arm_tracking_errors = [
+        arm_command_gaps = [
             abs(actual - target)
             for actual, target in zip(observed[:6], commanded[:6], strict=True)
         ]
-        arm_tracking_error = max(arm_tracking_errors)
-        gripper_tracking_error = abs(observed[6] - commanded[6])
-        violations = [
-            (index, error, max_tracking_error[index])
-            for index, error in enumerate(arm_tracking_errors)
-            if error > max_tracking_error[index]
-        ]
-        if violations:
-            index, error, limit = violations[0]
-            raise RuntimeError(
-                f"Joint {index} tracking error {error:.6f} rad exceeds "
-                f"dataset limit {limit:.6f} rad"
-            )
-        if gripper_tracking_error > max_tracking_error[6]:
-            raise RuntimeError(
-                f"Single-step gripper tracking error {gripper_tracking_error:.6f} m "
-                f"exceeds dataset limit {max_tracking_error[6]:.6f} m"
-            )
+        arm_command_gap = max(arm_command_gaps)
+        gripper_command_gap = abs(observed[6] - commanded[6])
         error_after = str(self.driver.get_error_information())
         if error_after.lower() != "no error":
             raise RuntimeError(f"Controller reports an error: {error_after}")
@@ -313,8 +314,54 @@ class PolicyHomeSession:
                 for target, current in zip(commanded[:6], start[:6], strict=True)
             ),
             commanded_gripper_delta_m=abs(commanded[6] - start[6]),
-            max_arm_tracking_error_rad=arm_tracking_error,
-            gripper_tracking_error_m=gripper_tracking_error,
+            max_arm_command_gap_rad=arm_command_gap,
+            gripper_command_gap_m=gripper_command_gap,
+            sampled_at_monotonic=sampled_at,
+        )
+
+    def settle_and_verify_policy_target(
+        self, target: list[float]
+    ) -> PolicyTargetVerification:
+        """Let the final non-blocking command finish, then verify tracking."""
+        if self.driver is None or not self.configured:
+            raise RuntimeError("Home session is not connected")
+        if len(target) != 7 or not all(isfinite(value) for value in target):
+            raise ValueError("Final policy target must contain seven finite values")
+        settings = self.config["policy_evaluation"]["clipped_rollout"]
+        goal_time = float(settings["min_time_to_move_multiplier"]) / float(
+            settings["control_fps"]
+        )
+        max_tracking_error = [
+            float(value) for value in settings["max_tracking_error"]
+        ]
+        if goal_time <= 0.2 or len(max_tracking_error) != 7:
+            raise ValueError("Final policy verification settings are invalid")
+        time.sleep(goal_time)
+        observed = self.read_positions()
+        errors = [
+            abs(actual - desired)
+            for actual, desired in zip(observed, target, strict=True)
+        ]
+        violations = [
+            (index, error, max_tracking_error[index])
+            for index, error in enumerate(errors)
+            if error > max_tracking_error[index]
+        ]
+        if violations:
+            index, error, limit = violations[0]
+            unit = "rad" if index < 6 else "m"
+            raise RuntimeError(
+                f"Final joint {index} tracking error {error:.6f} {unit} "
+                f"exceeds limit {limit:.6f} {unit}"
+            )
+        error_after = str(self.driver.get_error_information())
+        if error_after.lower() != "no error":
+            raise RuntimeError(f"Controller reports an error: {error_after}")
+        return PolicyTargetVerification(
+            target=tuple(target),
+            observed=tuple(observed),
+            max_arm_tracking_error_rad=max(errors[:6]),
+            gripper_tracking_error_m=errors[6],
         )
 
     def close(self) -> None:

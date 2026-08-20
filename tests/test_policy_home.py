@@ -127,6 +127,7 @@ def make_config() -> dict:
                 "max_cumulative_gripper_delta_m": 0.003,
                 "control_fps": 20.0,
                 "min_time_to_move_multiplier": 6.0,
+                "command_blocking": False,
                 "max_tracking_error": [0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.001],
             },
         },
@@ -178,7 +179,28 @@ def test_execute_bounded_policy_step_clips_then_tracks() -> None:
     assert result.max_commanded_arm_delta_rad == pytest.approx(0.02)
     assert result.commanded_gripper_delta_m == pytest.approx(0.001)
     assert result.observed == pytest.approx(result.commanded)
-    assert driver.all_commands[-1][1:] == pytest.approx((0.3, True))
+    assert driver.all_commands[-1][1:] == pytest.approx((0.3, False))
+    assert result.max_arm_command_gap_rad == pytest.approx(0.0)
+    assert result.gripper_command_gap_m == pytest.approx(0.0)
+    session.close()
+
+
+def test_final_nonblocking_target_is_verified_after_settle(monkeypatch) -> None:
+    driver = FakeHomeDriver()
+    session = PolicyHomeSession(make_api(driver), make_config(), timeout=20.0)
+    preparation = session.prepare()
+    monkeypatch.setattr("tcc_real_robot.policy_home.time.sleep", lambda _: None)
+
+    step = session.execute_bounded_policy_step(
+        [0.5, 2.0, 1.5, -1.0, 0.5, 0.5, 0.02],
+        list(preparation.observed),
+    )
+    verification = session.settle_and_verify_policy_target(list(step.commanded))
+
+    assert verification.target == step.commanded
+    assert verification.observed == pytest.approx(step.commanded)
+    assert verification.max_arm_tracking_error_rad == pytest.approx(0.0)
+    assert verification.gripper_tracking_error_m == pytest.approx(0.0)
     session.close()
 
 

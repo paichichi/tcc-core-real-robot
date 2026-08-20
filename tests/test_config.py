@@ -18,7 +18,7 @@ def test_initial_revision_disables_actuation() -> None:
     assert config["policy_evaluation"]["minimum_observed_rate_hz"] == 18.0
     assert config["policy_evaluation"]["camera_capture_fps"] == 30.0
     clipped = config["policy_evaluation"]["clipped_rollout"]
-    assert clipped["max_steps"] == 20
+    assert clipped["max_steps"] == 5
     assert clipped["max_action_delta"] == [
         0.02,
         0.02,
@@ -39,6 +39,7 @@ def test_initial_revision_disables_actuation() -> None:
     ]
     assert clipped["control_fps"] == 20.0
     assert clipped["min_time_to_move_multiplier"] == 6.0
+    assert clipped["command_blocking"] is False
     assert "max_cumulative_joint_delta_rad" not in clipped
     assert "max_cumulative_gripper_delta_m" not in clipped
     carrot_limits = clipped["dataset_action_limits"]["pick_and_place_carrot_100"]

@@ -372,6 +372,10 @@ def main() -> None:
     first_arm_delta: float | None = None
     first_gripper_delta: float | None = None
     bounded_steps: list[Any] = []
+    final_verification: Any | None = None
+    previous_policy_sample: tuple[float, tuple[float, ...]] | None = None
+    max_observed_arm_velocity = 0.0
+    max_observed_gripper_velocity = 0.0
     dataset_action_min: list[float] | None = None
     dataset_action_max: list[float] | None = None
     if args.execute_clipped_step:
@@ -421,6 +425,13 @@ def main() -> None:
             f"Camera maximum pair skew: {args.camera_max_pair_skew_ms:.3f} ms\n"
         )
         report.write(f"Policy rollout rate: {fps:.3f} Hz\n")
+        if args.execute_clipped_step:
+            clipped = evaluation_settings["clipped_rollout"]
+            goal_time = float(clipped["min_time_to_move_multiplier"]) / float(
+                clipped["control_fps"]
+            )
+            report.write("Policy command blocking: False (official continuous mode)\n")
+            report.write(f"Policy command goal time: {goal_time:.3f} s\n")
         report.write(f"Inference warmup steps: {inference_warmup_steps}\n")
         report.write(f"Maximum steps: {max_steps}\n\n")
         if dataset_action_min is not None and dataset_action_max is not None:
@@ -559,6 +570,50 @@ def main() -> None:
                             absolute_max=dataset_action_max,
                         )
                         bounded_steps.append(bounded_step)
+                        if previous_policy_sample is not None:
+                            previous_time, previous_positions = previous_policy_sample
+                            sample_period = (
+                                bounded_step.sampled_at_monotonic - previous_time
+                            )
+                            if sample_period <= 0:
+                                raise RuntimeError("Policy state timestamps did not advance")
+                            observed_arm_velocity = max(
+                                abs(current - previous) / sample_period
+                                for current, previous in zip(
+                                    bounded_step.start[:6],
+                                    previous_positions[:6],
+                                    strict=True,
+                                )
+                            )
+                            observed_gripper_velocity = (
+                                abs(bounded_step.start[6] - previous_positions[6])
+                                / sample_period
+                            )
+                            max_observed_arm_velocity = max(
+                                max_observed_arm_velocity, observed_arm_velocity
+                            )
+                            max_observed_gripper_velocity = max(
+                                max_observed_gripper_velocity,
+                                observed_gripper_velocity,
+                            )
+                            if observed_arm_velocity > float(
+                                robot_config["safety"]["max_joint_velocity_rad_s"]
+                            ):
+                                raise RuntimeError(
+                                    "Observed arm velocity "
+                                    f"{observed_arm_velocity:.6f} rad/s exceeds limit"
+                                )
+                            if observed_gripper_velocity > float(
+                                robot_config["safety"]["max_gripper_velocity_m_s"]
+                            ):
+                                raise RuntimeError(
+                                    "Observed gripper velocity "
+                                    f"{observed_gripper_velocity:.6f} m/s exceeds limit"
+                                )
+                        previous_policy_sample = (
+                            bounded_step.sampled_at_monotonic,
+                            bounded_step.start,
+                        )
                         commanded_values = ", ".join(
                             f"{value:.7f}" for value in bounded_step.commanded
                         )
@@ -573,10 +628,10 @@ def main() -> None:
                             f"{bounded_step.max_commanded_arm_delta_rad:.7f}\n"
                             f"step={step:03d} commanded_gripper_delta_m="
                             f"{bounded_step.commanded_gripper_delta_m:.7f}\n"
-                            f"step={step:03d} arm_tracking_error_rad="
-                            f"{bounded_step.max_arm_tracking_error_rad:.7f}\n"
-                            f"step={step:03d} gripper_tracking_error_m="
-                            f"{bounded_step.gripper_tracking_error_m:.7f}\n"
+                            f"step={step:03d} arm_immediate_command_gap_rad="
+                            f"{bounded_step.max_arm_command_gap_rad:.7f}\n"
+                            f"step={step:03d} gripper_immediate_command_gap_m="
+                            f"{bounded_step.gripper_command_gap_m:.7f}\n"
                         )
                     values = ", ".join(f"{value:.7f}" for value in action.tolist())
                     report.write(
@@ -585,6 +640,28 @@ def main() -> None:
                         f"pair_skew_ms={cameras.last_pair_skew_ms:.3f} "
                         f"action=[{values}]\n"
                     )
+            if args.execute_clipped_step and bounded_steps:
+                if home_session is None:
+                    raise RuntimeError("Policy session closed before final verification")
+                final_verification = home_session.settle_and_verify_policy_target(
+                    list(bounded_steps[-1].commanded)
+                )
+                report.write("\nFinal settled target verification\n")
+                report.write(
+                    "Observed: ["
+                    + ", ".join(
+                        f"{value:.7f}" for value in final_verification.observed
+                    )
+                    + "]\n"
+                )
+                report.write(
+                    "Maximum arm tracking error: "
+                    f"{final_verification.max_arm_tracking_error_rad:.7f} rad\n"
+                )
+                report.write(
+                    "Gripper tracking error: "
+                    f"{final_verification.gripper_tracking_error_m:.7f} m\n"
+                )
             if home_session is not None:
                 home_session.close()
                 home_session = None
@@ -624,9 +701,22 @@ def main() -> None:
                     if np.isfinite(latency_max) and latency_max > 0
                     else 0.0
                 )
-                minimum_rate_met = inference_rate >= minimum_rate_hz
+                if len(bounded_steps) > 1:
+                    command_span = (
+                        bounded_steps[-1].sampled_at_monotonic
+                        - bounded_steps[0].sampled_at_monotonic
+                    )
+                    control_rate = (
+                        (len(bounded_steps) - 1) / command_span
+                        if command_span > 0
+                        else 0.0
+                    )
+                else:
+                    control_rate = 0.0
+                minimum_rate_met = control_rate >= minimum_rate_hz
             else:
                 inference_rate = observed_rate
+                control_rate = observed_rate
                 minimum_rate_met = observed_rate >= minimum_rate_hz
             checks = {
                 "all_steps_completed": completed == max_steps,
@@ -657,16 +747,17 @@ def main() -> None:
                         "commanded_gripper_delta_safe": bool(bounded_steps)
                         and max(item.commanded_gripper_delta_m for item in bounded_steps)
                         <= float(clipped["max_action_delta"][6]) + 1e-9,
-                        "clipped_arm_tracking_safe": bool(bounded_steps)
-                        and max(
-                            item.max_arm_tracking_error_rad for item in bounded_steps
-                        )
-                        <= max(float(value) for value in clipped["max_tracking_error"][:6]),
-                        "clipped_gripper_tracking_safe": bool(bounded_steps)
-                        and max(
-                            item.gripper_tracking_error_m for item in bounded_steps
-                        )
-                        <= float(clipped["max_tracking_error"][6]),
+                        "official_nonblocking_commands": clipped["command_blocking"]
+                        is False,
+                        "observed_arm_velocity_safe": max_observed_arm_velocity
+                        <= float(
+                            robot_config["safety"]["max_joint_velocity_rad_s"]
+                        ),
+                        "observed_gripper_velocity_safe": max_observed_gripper_velocity
+                        <= float(
+                            robot_config["safety"]["max_gripper_velocity_m_s"]
+                        ),
+                        "final_tracking_safe": final_verification is not None,
                     }
                 )
             if failure:
@@ -676,11 +767,14 @@ def main() -> None:
                     "all_steps_completed",
                     "home_staging_completed",
                     "camera_pair_skew_safe",
+                    "minimum_rate_met",
                     "clipped_rollout_completed",
                     "commanded_arm_delta_safe",
                     "commanded_gripper_delta_safe",
-                    "clipped_arm_tracking_safe",
-                    "clipped_gripper_tracking_safe",
+                    "official_nonblocking_commands",
+                    "observed_arm_velocity_safe",
+                    "observed_gripper_velocity_safe",
+                    "final_tracking_safe",
                 )
                 if all(checks[name] for name in execution_checks):
                     decision = "CLIPPED_ROLLOUT_COMPLETE_RAW_POLICY_BLOCKED"
@@ -699,6 +793,15 @@ def main() -> None:
                 report.write(
                     f"Single-step inference-only rate: {inference_rate:.3f} Hz "
                     "(not a sustained-rate measurement)\n"
+                )
+                report.write(f"Observed command rate: {control_rate:.3f} Hz\n")
+                report.write(
+                    "Maximum observed arm velocity: "
+                    f"{max_observed_arm_velocity:.6f} rad/s\n"
+                )
+                report.write(
+                    "Maximum observed gripper velocity: "
+                    f"{max_observed_gripper_velocity:.6f} m/s\n"
                 )
             else:
                 report.write(f"Elapsed: {elapsed:.6f} s\n")
