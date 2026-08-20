@@ -30,9 +30,8 @@ backbone:
 
 model_hub:
   repository: Chipaipai/tcc-core-real-robot-policies
-  # Pinned revision currently supplies the frozen backbone. Replace this with
-  # the immutable commit containing the new 60-demo policy after publication.
-  revision: 5ef939242b4bb5d8caef52b83bd09ce8e2ebdb12
+  # Immutable release containing the frozen backbone and matching v2 policy.
+  revision: 1b104dfdd7b41d9619c0b128ccf321e77a03469a
   backbone_manifest: backbones/manifest.json
   policy_checkpoint_template: policies/{backbone}/{demonstrations}/checkpoint_050000.pt
   policy_metrics_template: policies/{backbone}/{demonstrations}/metrics.json
