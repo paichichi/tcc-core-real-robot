@@ -15,6 +15,9 @@ from tcc_real_robot.policy import ActionNormalizer, TCCMLPPolicy
 
 IMAGENET_MEAN = torch.tensor((0.485, 0.456, 0.406)).view(1, 3, 1, 1)
 IMAGENET_STD = torch.tensor((0.229, 0.224, 0.225)).view(1, 3, 1, 1)
+_NORMALIZATION_CACHE: dict[
+    tuple[str, torch.dtype], tuple[torch.Tensor, torch.Tensor]
+] = {}
 
 
 @dataclass(frozen=True)
@@ -46,17 +49,37 @@ def resolve_device(requested: str) -> torch.device:
     return device
 
 
-def preprocess_rgb_frames(frames: list[np.ndarray], image_size: int) -> torch.Tensor:
+def preprocess_rgb_frames(
+    frames: list[np.ndarray],
+    image_size: int,
+    device: torch.device | None = None,
+) -> torch.Tensor:
     """Apply the exact RGB preprocessing used to build the training cache."""
     if not frames:
         raise ValueError("At least one RGB frame is required")
     for frame in frames:
         if frame.ndim != 3 or frame.shape[2] != 3 or frame.dtype != np.uint8:
             raise ValueError("Frames must be uint8 RGB arrays with shape [H, W, 3]")
-    images = torch.from_numpy(np.stack(frames)).permute(0, 3, 1, 2).float()
+    images = torch.from_numpy(np.stack(frames))
+    if device is not None:
+        # Transfer compact uint8 data instead of a 4x larger float32 tensor.
+        images = images.to(device, non_blocking=device.type == "cuda")
+    images = images.permute(0, 3, 1, 2).float()
     images.div_(255.0)
     images = vision_f.resize(images, [image_size, image_size], antialias=True)
-    return (images - IMAGENET_MEAN) / IMAGENET_STD
+    cache_key = (str(images.device), images.dtype)
+    statistics = _NORMALIZATION_CACHE.get(cache_key)
+    if statistics is None:
+        statistics = (
+            IMAGENET_MEAN.to(device=images.device, dtype=images.dtype),
+            IMAGENET_STD.to(device=images.device, dtype=images.dtype),
+        )
+        _NORMALIZATION_CACHE[cache_key] = statistics
+    mean, std = statistics
+    images.sub_(mean).div_(std)
+    if images.device.type == "cuda":
+        images = images.contiguous(memory_format=torch.channels_last)
+    return images
 
 
 def load_policy_bundle(
@@ -158,8 +181,8 @@ def predict_action(
     number_of_tasks = int(bundle.config["policy"]["number_of_tasks"])
     if not 0 <= task_index < number_of_tasks:
         raise ValueError(f"Task index {task_index} is outside [0, {number_of_tasks})")
-    images = preprocess_rgb_frames([cam_main_rgb, cam_wrist_rgb], image_size).to(
-        device, non_blocking=True
+    images = preprocess_rgb_frames(
+        [cam_main_rgb, cam_wrist_rgb], image_size, device=device
     )
     with torch.autocast(
         device_type=device.type,

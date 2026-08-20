@@ -37,7 +37,12 @@ class _SpatialAveragePool(nn.Module):
 def _freeze(backbone: nn.Module, device: torch.device) -> nn.Module:
     for parameter in backbone.parameters():
         parameter.requires_grad_(False)
-    return backbone.eval().to(device)
+    backbone = backbone.eval().to(device)
+    if device.type == "cuda":
+        torch.backends.cudnn.benchmark = True
+        torch.set_float32_matmul_precision("high")
+        backbone = backbone.to(memory_format=torch.channels_last)
+    return backbone
 
 
 def load_frozen_tcc_backbone(

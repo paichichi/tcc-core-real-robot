@@ -40,6 +40,11 @@ python scripts/run_policy.py --execute-policy --emergency-stop-ready
 需要临时覆盖时可追加参数，例如 `--max-steps 30`、`--task pineapple` 或
 `--online`。
 
+默认使用 `--camera-read-mode latest`：两台 30 FPS 相机在后台持续采集同步帧，
+20 Hz policy 循环读取最新帧，使相机等待与 GPU 推理重叠。需要对照旧路径时可追加
+`--camera-read-mode synchronous`。报告会分别记录 camera、robot state、policy 和
+command 的 median/p95 延迟。
+
 ## 1. 进入项目并激活环境
 
 ```bash

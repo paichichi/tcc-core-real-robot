@@ -75,6 +75,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--camera-retry-delay", type=float, default=0.25)
     parser.add_argument("--camera-min-channel-std", type=float, default=2.0)
     parser.add_argument("--camera-max-pair-skew-ms", type=float, default=50.0)
+    parser.add_argument(
+        "--camera-read-mode",
+        choices=("latest", "synchronous"),
+        default="latest",
+        help=(
+            "Use background latest-frame capture to overlap 30 FPS acquisition "
+            "with inference, or the legacy synchronous read path."
+        ),
+    )
     parser.add_argument("--inference-warmup-steps", type=int)
     parser.add_argument("--controller-timeout", type=float, default=20.0)
     parser.add_argument(
@@ -420,8 +429,13 @@ def main() -> None:
     exit_ok = False
     failure = ""
     latencies_ms: list[float] = []
+    camera_latencies_ms: list[float] = []
+    state_latencies_ms: list[float] = []
+    policy_latencies_ms: list[float] = []
+    command_latencies_ms: list[float] = []
     pair_skews_ms: list[float] = []
     home_session: Any | None = None
+    cameras: Any | None = None
     home_reference: list[float] | None = None
     first_arm_delta: float | None = None
     first_gripper_delta: float | None = None
@@ -472,6 +486,7 @@ def main() -> None:
         report.write(f"Policy SHA256: {assets.policy_sha256}\n")
         report.write(f"Device: {device}\n")
         report.write(f"Camera backend: {args.camera_backend}\n")
+        report.write(f"Camera read mode: {args.camera_read_mode}\n")
         if args.camera_backend == "realsense-sdk":
             report.write(f"Camera main serial: {args.cam_main_serial}\n")
             report.write(f"Camera wrist serial: {args.cam_wrist_serial}\n")
@@ -600,6 +615,13 @@ def main() -> None:
                     minimum_channel_std=args.camera_min_channel_std,
                     maximum_pair_skew_ms=args.camera_max_pair_skew_ms,
                 )
+            if args.camera_read_mode == "latest":
+                from tcc_real_robot.camera_buffer import LatestFramePairBuffer
+
+                camera_context = LatestFramePairBuffer(
+                    camera_context,
+                    timeout_s=2.0,
+                )
             with camera_context as cameras:
                 report.write(f"Camera main negotiated: {cameras.main_properties}\n")
                 report.write(
@@ -633,7 +655,11 @@ def main() -> None:
                     if delay > 0:
                         time.sleep(delay)
                     iteration_started = time.monotonic()
+                    camera_started = time.monotonic()
                     main_rgb, wrist_rgb = cameras.read_rgb_pair()
+                    camera_latencies_ms.append(
+                        (time.monotonic() - camera_started) * 1000.0
+                    )
                     if cameras.last_pair_skew_ms is None:
                         raise RuntimeError("Camera pair skew was not recorded")
                     pair_skews_ms.append(cameras.last_pair_skew_ms)
@@ -645,11 +671,14 @@ def main() -> None:
                         raise RuntimeError(
                             f"cam_wrist shape {wrist_rgb.shape} != {expected_resolution}"
                         )
-                    policy_state = (
-                        home_session.read_positions()
-                        if policy_uses_proprioception and home_session is not None
-                        else None
+                    state_started = time.monotonic()
+                    policy_state = None
+                    if policy_uses_proprioception and home_session is not None:
+                        policy_state = home_session.read_positions()
+                    state_latencies_ms.append(
+                        (time.monotonic() - state_started) * 1000.0
                     )
+                    policy_started = time.monotonic()
                     action = predict_action(
                         backbone,
                         bundle,
@@ -659,6 +688,9 @@ def main() -> None:
                         int(backbone_metadata["image_size"]),
                         device,
                         observation_state=policy_state,
+                    )
+                    policy_latencies_ms.append(
+                        (time.monotonic() - policy_started) * 1000.0
                     )
                     completed += 1
                     elapsed = time.monotonic() - rollout_started
@@ -679,11 +711,15 @@ def main() -> None:
                             raise RuntimeError(
                                 "Clipped actuation requires a prepared home reference"
                             )
+                        command_started = time.monotonic()
                         bounded_step = home_session.execute_bounded_policy_step(
                             [float(value) for value in action.tolist()],
                             home_reference,
                             absolute_min=dataset_action_min,
                             absolute_max=dataset_action_max,
+                        )
+                        command_latencies_ms.append(
+                            (time.monotonic() - command_started) * 1000.0
                         )
                         bounded_steps.append(bounded_step)
                         if previous_policy_sample is not None:
@@ -942,6 +978,23 @@ def main() -> None:
             report.write(f"Latency median: {latency_median:.3f} ms\n")
             report.write(f"Latency p95: {latency_p95:.3f} ms\n")
             report.write(f"Latency maximum: {latency_max:.3f} ms\n")
+            for name, values in (
+                ("Camera-read", camera_latencies_ms),
+                ("Robot-state", state_latencies_ms),
+                ("Policy", policy_latencies_ms),
+                ("Command", command_latencies_ms),
+            ):
+                if values:
+                    report.write(
+                        f"{name} latency median/p95: "
+                        f"{np.median(values):.3f} / "
+                        f"{np.percentile(values, 95):.3f} ms\n"
+                    )
+            captured_pairs = getattr(cameras, "captured_pairs", None)
+            dropped_pairs = getattr(cameras, "dropped_pairs", None)
+            if captured_pairs is not None and dropped_pairs is not None:
+                report.write(f"Camera pairs captured: {captured_pairs}\n")
+                report.write(f"Camera pairs superseded: {dropped_pairs}\n")
             report.write(f"Camera pair skew median: {pair_skew_median:.3f} ms\n")
             report.write(f"Camera pair skew maximum: {pair_skew_max:.3f} ms\n")
             if first_arm_delta is not None:
