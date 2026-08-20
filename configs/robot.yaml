@@ -88,6 +88,12 @@ policy_evaluation:
     max_tracking_error:
       [0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.001]
 
+demo_replay:
+  start_goal_time_s: 5.0
+  start_gripper_goal_time_s: 2.0
+  command_goal_time_s: 0.3
+  max_tracking_error: [0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.001]
+
 workspace_calibration:
   status: collecting_points
   required_labels:
