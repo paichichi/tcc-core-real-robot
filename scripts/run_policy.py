@@ -372,10 +372,15 @@ def main() -> None:
     device = resolve_device(args.device)
     task_names = [str(value) for value in config["dataset"]["tasks"]]
     task_index, task_name = resolve_task(args.task, task_names)
-    max_configured_steps = int(config["evaluation"]["max_rollout_steps"])
-    max_steps = args.max_steps or max_configured_steps
-    if not 1 <= max_steps <= max_configured_steps:
-        raise ValueError(f"--max-steps must be within [1, {max_configured_steps}]")
+    dataset_rollout_steps = int(config["evaluation"]["max_rollout_steps"])
+    max_allowed_steps = (
+        int(robot_config["policy_evaluation"]["clipped_rollout"]["max_steps"])
+        if args.execute_clipped_step
+        else dataset_rollout_steps
+    )
+    max_steps = args.max_steps or dataset_rollout_steps
+    if not 1 <= max_steps <= max_allowed_steps:
+        raise ValueError(f"--max-steps must be within [1, {max_allowed_steps}]")
     fps = float(config["observations"]["fps"])
     evaluation_settings = robot_config["policy_evaluation"]
     camera_capture_fps = float(evaluation_settings["camera_capture_fps"])
