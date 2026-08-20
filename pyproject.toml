@@ -34,6 +34,9 @@ eval = [
   "torch>=2.4",
   "torchvision>=0.19",
 ]
+realsense = [
+  "pyrealsense2>=2.55",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

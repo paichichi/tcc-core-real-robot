@@ -10,15 +10,15 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from run_policy import SynchronizedCameras
+from tcc_real_robot.realsense_cameras import RealSenseColorCameras
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Capture fresh cam_main and cam_wrist frames without robot access."
     )
-    parser.add_argument("--cam-main", required=True)
-    parser.add_argument("--cam-wrist", required=True)
+    parser.add_argument("--cam-main-serial", required=True)
+    parser.add_argument("--cam-wrist-serial", required=True)
     parser.add_argument("--width", type=int, default=640)
     parser.add_argument("--height", type=int, default=480)
     parser.add_argument("--fps", type=float, default=30.0)
@@ -39,13 +39,20 @@ def main() -> None:
     if args.warmup_frames < 0:
         raise SystemExit("--warmup-frames must be non-negative")
 
-    with SynchronizedCameras(
-        cv2,
-        args.cam_main,
-        args.cam_wrist,
+    try:
+        import pyrealsense2 as rs
+    except ImportError as exc:
+        raise SystemExit(
+            "PYREALSENSE2_NOT_INSTALLED: run python -m pip install pyrealsense2"
+        ) from exc
+
+    with RealSenseColorCameras(
+        rs,
+        args.cam_main_serial,
+        args.cam_wrist_serial,
         args.width,
         args.height,
-        args.fps,
+        int(args.fps),
     ) as cameras:
         for _ in range(args.warmup_frames):
             cameras.read_rgb_pair()
@@ -66,8 +73,9 @@ def main() -> None:
         report.write("==========================\n")
         report.write("Robot connection: DISABLED\n")
         report.write("Policy inference: DISABLED\n")
-        report.write(f"cam_main: {args.cam_main} {main_properties}\n")
-        report.write(f"cam_wrist: {args.cam_wrist} {wrist_properties}\n")
+        report.write("camera_backend: RealSense SDK color/rgb8\n")
+        report.write(f"cam_main: {main_properties}\n")
+        report.write(f"cam_wrist: {wrist_properties}\n")
         report.write(f"pair_skew_ms: {pair_skew_ms:.3f}\n")
         report.write(
             "cam_main_rgb_mean: "

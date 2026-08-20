@@ -14,16 +14,13 @@ def test_initial_revision_disables_actuation() -> None:
     assert config["robot"]["motor_parameters"] == "wxai_v0_20250509"
     assert config["robot"]["expected_driver_version"] == "1.9.3"
     assert config["robot"]["expected_firmware_version"] == "1.9.2"
-    assert (
-        config["cameras"]["cam_main"]["realsense_viewer_serial"]
-        == "838212073584"
-    )
+    assert config["cameras"]["cam_main"]["serial_number"] == "838212073584"
+    assert config["cameras"]["cam_main"]["asic_serial_number"] == "843213020438"
     assert config["cameras"]["cam_main"]["usb_serial"] == "UNAVAILABLE"
-    assert (
-        config["cameras"]["cam_wrist"]["realsense_viewer_serial"]
-        == "409122274608"
-    )
-    assert config["cameras"]["cam_wrist"]["usb_serial"] == "242623072067"
+    assert config["cameras"]["cam_wrist"]["serial_number"] == "409122274608"
+    assert config["cameras"]["cam_wrist"]["asic_serial_number"] == "242623072067"
+    assert config["cameras"]["stream"] == "color"
+    assert config["cameras"]["format"] == "rgb8"
     assert config["policy_evaluation"]["inference_warmup_steps"] >= 1
     assert config["policy_evaluation"]["minimum_observed_rate_hz"] == 18.0
     assert config["policy_evaluation"]["camera_capture_fps"] == 30.0

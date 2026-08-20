@@ -37,16 +37,23 @@ action_contract:
 cameras:
   cam_main:
     model: Intel RealSense D435
-    realsense_viewer_serial: "838212073584"
+    serial_number: "838212073584"
+    asic_serial_number: "843213020438"
     usb_serial: UNAVAILABLE
-    physical_path: UNRESOLVED
+    physical_path: /sys/devices/pci0000:80/0000:80:14.0/usb3/3-13/3-13.2/3-13.2:1.0/video4linux/video6
     v4l2_node: UNRESOLVED
   cam_wrist:
     model: Intel RealSense D405
-    realsense_viewer_serial: "409122274608"
-    usb_serial: "242623072067"
-    physical_path: UNRESOLVED
+    serial_number: "409122274608"
+    asic_serial_number: "242623072067"
+    usb_serial: UNAVAILABLE
+    physical_path: /sys/devices/pci0000:80/0000:80:14.0/usb4/4-7/4-7:1.0/video4linux/video0
     v4l2_node: UNRESOLVED
+  stream: color
+  format: rgb8
+  width: 640
+  height: 480
+  fps: 30
 
 safety:
   dry_run_by_default: true

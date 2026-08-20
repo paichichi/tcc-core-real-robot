@@ -1,1 +1,1 @@
-python scripts/inspect_realsense_sdk.py
+python scripts/capture_policy_frames.py --cam-main-serial 838212073584 --cam-wrist-serial 409122274608
