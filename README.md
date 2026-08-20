@@ -22,9 +22,10 @@ python scripts/train_policy.py --config configs/experiment_visual_absolute_60.ya
 ```
 
 训练脚本会拒绝 split 与配置不一致的 cache。部署前使用 validation 最优的
-`checkpoint_050000.pt`，test 集只在选择完 checkpoint 后评估一次。新 checkpoint
-发布到 Hugging Face 后，必须把新配置中的 `model_hub.revision` 固定为发布 commit，
-再开始 shadow 或实机评估。
+`checkpoint_050000.pt`，test 集只在选择完 checkpoint 后评估一次。已发布的
+60-demo ViT policy 固定到 Hugging Face commit
+`1b104dfdd7b41d9619c0b128ccf321e77a03469a`；先下载校验并执行 shadow，不直接进入
+实机 rollout。
 
 当前代码兼容旧的 `tcc_mlp_bc_v0` checkpoint，并提供改进后的
 `tcc_mlp_bc_v1_future_delta`：冻结视觉 backbone，输入两路视觉特征、7 维当前

@@ -107,6 +107,10 @@ def test_visual_absolute_60_policy_configuration() -> None:
     assert "lookahead_frames" not in policy
     assert "execution_delta_gain" not in policy
     assert config["backbone"]["hub_name"] == "ours_vit"
+    assert set(config["model_hub"]["supported_backbones"]) == {
+        "ours_vit",
+        "ours_rn50",
+    }
     assert config["model_hub"]["supported_demonstrations"] == [60]
     assert config["split"] == {
         "train_episodes_per_task": 60,

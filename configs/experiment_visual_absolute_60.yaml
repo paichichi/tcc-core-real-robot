@@ -37,6 +37,7 @@ model_hub:
   policy_metrics_template: policies/{backbone}/{demonstrations}/metrics.json
   supported_backbones:
     - ours_vit
+    - ours_rn50
   supported_demonstrations: [60]
 
 policy:
