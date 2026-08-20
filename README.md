@@ -41,11 +41,11 @@ python scripts/run_policy.py --execute-policy --emergency-stop-ready
 `--online`。
 
 数据集标准 rollout 长度仍为 359 步。为了诊断末段行为，真实 clipped rollout
-允许显式扩展到最多 700 步；动作范围、单步变化、command lead、workspace 和
+允许显式扩展到最多 900 步；动作范围、单步变化、command lead、workspace 和
 tracking 限制不会解除：
 
 ```bash
-python scripts/run_policy.py --execute-policy --emergency-stop-ready --max-steps 700
+python scripts/run_policy.py --execute-policy --emergency-stop-ready --max-steps 900
 ```
 
 默认使用 `--camera-read-mode latest`：两台 30 FPS 相机在后台持续采集同步帧，
