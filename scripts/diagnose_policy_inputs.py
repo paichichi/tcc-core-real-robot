@@ -119,6 +119,20 @@ def labeled_tile(frame: np.ndarray, label: str) -> np.ndarray:
     return tile
 
 
+def match_channel_moments(source: np.ndarray, target: np.ndarray) -> np.ndarray:
+    """Match per-channel source moments to a reference image for diagnosis."""
+    source_float = source.astype(np.float32)
+    target_float = target.astype(np.float32)
+    source_mean = source_float.mean(axis=(0, 1), keepdims=True)
+    source_std = source_float.std(axis=(0, 1), keepdims=True)
+    target_mean = target_float.mean(axis=(0, 1), keepdims=True)
+    target_std = target_float.std(axis=(0, 1), keepdims=True)
+    if np.any(source_std < 1e-6):
+        raise ValueError("Cannot color-match a flat source channel")
+    matched = (source_float - source_mean) * (target_std / source_std) + target_mean
+    return np.clip(np.rint(matched), 0, 255).astype(np.uint8)
+
+
 def main() -> None:
     args = parse_args()
     if args.episodes <= 0:
@@ -314,6 +328,47 @@ def main() -> None:
         .numpy()
         .astype(np.float64)
     )
+    matched_live_main = match_channel_moments(live_main, nearest_normal["main"])
+    matched_live_wrist = match_channel_moments(live_wrist, nearest_normal["wrist"])
+    matched_both_prediction = (
+        predict_action(
+            backbone,
+            bundle,
+            matched_live_main,
+            matched_live_wrist,
+            task_index,
+            image_size,
+            device,
+        )
+        .numpy()
+        .astype(np.float64)
+    )
+    matched_main_prediction = (
+        predict_action(
+            backbone,
+            bundle,
+            matched_live_main,
+            live_wrist,
+            task_index,
+            image_size,
+            device,
+        )
+        .numpy()
+        .astype(np.float64)
+    )
+    matched_wrist_prediction = (
+        predict_action(
+            backbone,
+            bundle,
+            live_main,
+            matched_live_wrist,
+            task_index,
+            image_size,
+            device,
+        )
+        .numpy()
+        .astype(np.float64)
+    )
     live_main_demo_wrist_prediction = (
         predict_action(
             backbone,
@@ -348,12 +403,16 @@ def main() -> None:
     live_wrist_path = args.output_dir / f"{stem}_live_wrist.png"
     demo_main_path = args.output_dir / f"{stem}_nearest_demo_main.png"
     demo_wrist_path = args.output_dir / f"{stem}_nearest_demo_wrist.png"
+    matched_main_path = args.output_dir / f"{stem}_matched_live_main.png"
+    matched_wrist_path = args.output_dir / f"{stem}_matched_live_wrist.png"
     contact_path = args.output_dir / f"{stem}_comparison.jpg"
     report_path = args.output_dir / f"{stem}.txt"
     save_rgb(live_main_path, live_main)
     save_rgb(live_wrist_path, live_wrist)
     save_rgb(demo_main_path, nearest_normal["main"])
     save_rgb(demo_wrist_path, nearest_normal["wrist"])
+    save_rgb(matched_main_path, matched_live_main)
+    save_rgb(matched_wrist_path, matched_live_wrist)
     contact = np.vstack(
         (
             np.hstack(
@@ -387,6 +446,9 @@ def main() -> None:
     demo_main_live_wrist_delta = action_delta(
         demo_main_live_wrist_prediction, home
     )
+    matched_both_delta = action_delta(matched_both_prediction, home)
+    matched_main_delta = action_delta(matched_main_prediction, home)
+    matched_wrist_delta = action_delta(matched_wrist_prediction, home)
     nearest_action_error = np.abs(nearest_prediction - nearest_normal["action"])
     with report_path.open("w", encoding="utf-8") as report:
         report.write("Live Policy Input Diagnostic\n")
@@ -431,6 +493,34 @@ def main() -> None:
             f"{demo_main_live_wrist_delta[1]:.7f} m\n\n"
         )
         report.write(
+            "Color-matched both prediction: "
+            f"{matched_both_prediction.tolist()}\n"
+        )
+        report.write(
+            "Color-matched both maximum arm delta: "
+            f"{matched_both_delta[0]:.7f} rad\n"
+        )
+        report.write(
+            "Color-matched both gripper delta: "
+            f"{matched_both_delta[1]:.7f} m\n"
+        )
+        report.write(
+            "Color-matched main-only maximum arm delta: "
+            f"{matched_main_delta[0]:.7f} rad\n"
+        )
+        report.write(
+            "Color-matched main-only gripper delta: "
+            f"{matched_main_delta[1]:.7f} m\n"
+        )
+        report.write(
+            "Color-matched wrist-only maximum arm delta: "
+            f"{matched_wrist_delta[0]:.7f} rad\n"
+        )
+        report.write(
+            "Color-matched wrist-only gripper delta: "
+            f"{matched_wrist_delta[1]:.7f} m\n\n"
+        )
+        report.write(
             "Nearest normal-order demo: "
             f"episode {nearest_normal['episode']:06d}, "
             f"similarity={nearest_normal['normal_similarity']:.7f}\n"
@@ -465,6 +555,8 @@ def main() -> None:
         report.write(f"Live wrist image: {live_wrist_path}\n")
         report.write(f"Nearest demo main image: {demo_main_path}\n")
         report.write(f"Nearest demo wrist image: {demo_wrist_path}\n")
+        report.write(f"Color-matched live main image: {matched_main_path}\n")
+        report.write(f"Color-matched live wrist image: {matched_wrist_path}\n")
         report.write(f"Comparison image: {contact_path}\n")
 
     print(f"report: {report_path}")

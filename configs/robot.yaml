@@ -34,6 +34,16 @@ action_contract:
   semantics: UNVERIFIED
   enabled: false
 
+cameras:
+  cam_main:
+    model: Intel RealSense D435
+    serial: "838212073584"
+    v4l2_node: UNRESOLVED
+  cam_wrist:
+    model: Intel RealSense D405
+    serial: "409122274608"
+    v4l2_node: UNRESOLVED
+
 safety:
   dry_run_by_default: true
   require_explicit_execute_flag: true

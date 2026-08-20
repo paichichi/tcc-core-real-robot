@@ -14,6 +14,8 @@ def test_initial_revision_disables_actuation() -> None:
     assert config["robot"]["motor_parameters"] == "wxai_v0_20250509"
     assert config["robot"]["expected_driver_version"] == "1.9.3"
     assert config["robot"]["expected_firmware_version"] == "1.9.2"
+    assert config["cameras"]["cam_main"]["serial"] == "838212073584"
+    assert config["cameras"]["cam_wrist"]["serial"] == "409122274608"
     assert config["policy_evaluation"]["inference_warmup_steps"] >= 1
     assert config["policy_evaluation"]["minimum_observed_rate_hz"] == 18.0
     assert config["policy_evaluation"]["camera_capture_fps"] == 30.0
