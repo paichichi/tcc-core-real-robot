@@ -25,7 +25,7 @@ def test_initial_revision_disables_actuation() -> None:
     assert config["policy_evaluation"]["minimum_observed_rate_hz"] == 18.0
     assert config["policy_evaluation"]["camera_capture_fps"] == 30.0
     clipped = config["policy_evaluation"]["clipped_rollout"]
-    assert clipped["max_steps"] == 30
+    assert clipped["max_steps"] == 60
     assert clipped["max_action_delta"] == [
         0.02,
         0.02,
