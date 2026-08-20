@@ -1,21 +1,21 @@
-# TCC-MLP-BC v0
+# TCC-MLP-BC v1
 
-The first policy baseline follows the small language-conditioned behavior
-cloning heads used by R3M, LIV, DecisionNCE, and AcTOL. It is intentionally a
-reactive, single-step policy:
+The policy follows the small language-conditioned behavior-cloning heads used
+by R3M, LIV, DecisionNCE, and AcTOL while conditioning each prediction on the
+current 7-D robot state:
 
 ```text
 cam_main  -> shared frozen TCC backbone -> feature_main  --+
-cam_wrist -> shared frozen TCC backbone -> feature_wrist --+-> MLP -> 7-D action
+cam_wrist -> shared frozen TCC backbone -> feature_wrist --+-> MLP -> 7-D future delta
 four-way task ID                         -> one-hot -------+
+current robot state                      -> 7-D -----------+
 ```
 
 The MLP has two 256-unit ReLU layers and is optimized with Adam for 50,000
-gradient steps using a batch size of 32 and learning rate of `1e-3`. Actions
-are standardized with statistics computed from training episodes only. The
-first baseline deliberately excludes proprioception so it matches the AcTOL
-real-robot configuration. A state-conditioned ablation can follow after this
-baseline is established.
+gradient steps using a batch size of 32 and learning rate of `1e-3`. The input
+uses LayerNorm and the policy is trained with SmoothL1 loss. Its target is
+`action[t+10] - state[t]`; at 20 Hz this is a 0.5-second future delta. Runtime
+execution multiplies the prediction by `0.1` to obtain a single-step command.
 
 `evaluation.max_rollout_steps: 359` is a timeout matching the recorded episode
 length. It is not an action chunk. The policy always predicts exactly one
@@ -23,10 +23,11 @@ action.
 
 ## Episode split
 
-Each task contributes 60 deterministically selected training episodes, for 240
-demonstrations in total. There is no validation or offline test split. The
-remaining 40 episodes per task are unused. We always use the final 50,000-step
-checkpoint and evaluate it through real-robot rollouts.
+Each task contributes 80 training, 10 validation, and 10 test episodes. The
+split is performed at episode level to prevent frame leakage. Validation loss
+selects the best checkpoint; `checkpoint_050000.pt` and `checkpoint_best.pt`
+contain those best validation weights, while `checkpoint_last.pt` preserves
+the final optimization step.
 
 ## Cache frozen features
 
@@ -38,7 +39,7 @@ The model repository and full commit revision are pinned in
 ```bash
 python scripts/fetch_policy_assets.py \
   --backbone ours_rn50 \
-  --demonstrations 60
+  --demonstrations 80
 ```
 
 After the first successful download, the same command can run without network
@@ -73,7 +74,7 @@ Before using live cameras, evaluate recorded training-demo first frames:
 ```bash
 python scripts/eval_demo_first_frames.py \
   --backbone ours_rn50 \
-  --demonstrations 60 \
+  --demonstrations 80 \
   --task carrot \
   --episodes 10 \
   --tcc-source-root /path/to/TCC-core \
@@ -91,7 +92,7 @@ checkpoint in shadow mode:
 python -m pip install -e '.[train,eval,robot,dev]'
 python scripts/run_policy.py \
   --backbone ours_rn50 \
-  --demonstrations 60 \
+  --demonstrations 80 \
   --task carrot \
   --cam-main /dev/v4l/by-id/MAIN_CAMERA \
   --cam-wrist /dev/v4l/by-id/WRIST_CAMERA \
@@ -101,11 +102,12 @@ python scripts/run_policy.py \
   --max-steps 10
 ```
 
-The command restores the policy architecture and action normalization from the
-50,000-step checkpoint. It applies the same RGB resize and ImageNet
-normalization used during feature caching, predicts denormalized 7-D absolute
-actions, and writes a human-readable report under `outputs/`. Use the full 359
-steps only after the 10-step camera and latency smoke test passes.
+The command restores the policy architecture and normalization from the best
+validation checkpoint. It applies the same RGB resize and ImageNet
+normalization used during feature caching, converts the predicted future delta
+into a denormalized 7-D single-step command, and writes a human-readable report
+under `outputs/`. Use the full 359 steps only after the 10-step camera and
+latency smoke test passes.
 
 `run_policy.py` keeps policy predictions shadow-only. `--execute-home` is a
 separate, explicit staging action: it moves slowly to the median first state of
@@ -118,7 +120,7 @@ fails closed; shadow output is never sent to the Trossen driver.
 ```bash
 python scripts/train_policy.py \
   --cache-root runs/tcc_features \
-  --output-dir runs/tcc_mlp_bc_v0
+  --output-dir runs/tcc_mlp_bc_v1
 ```
 
 The output contains `checkpoint_050000.pt` and training diagnostics. Training

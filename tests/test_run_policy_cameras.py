@@ -30,7 +30,7 @@ def test_real_policy_preset_has_short_fixed_defaults(monkeypatch) -> None:
 
     assert args.task == "carrot"
     assert args.backbone == "ours_rn50"
-    assert args.demonstrations == 60
+    assert args.demonstrations == 80
     assert args.camera_backend == "realsense-sdk"
     assert args.tcc_source_root == Path("/home/robotarm/TCC-core")
     assert args.offline is True

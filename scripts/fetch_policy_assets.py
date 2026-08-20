@@ -17,7 +17,7 @@ def main() -> None:
     )
     parser.add_argument("--config", type=Path, default=Path("configs/experiment.yaml"))
     parser.add_argument("--backbone", default="ours_rn50")
-    parser.add_argument("--demonstrations", type=int, default=60)
+    parser.add_argument("--demonstrations", type=int, default=80)
     parser.add_argument("--cache-dir", type=Path)
     parser.add_argument(
         "--offline",

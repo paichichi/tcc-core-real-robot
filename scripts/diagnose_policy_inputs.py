@@ -40,7 +40,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--robot-config", type=Path, default=Path("configs/robot.yaml"))
     parser.add_argument("--dataset-root", type=Path)
     parser.add_argument("--backbone", default="ours_rn50")
-    parser.add_argument("--demonstrations", type=int, default=60)
+    parser.add_argument("--demonstrations", type=int, default=80)
     parser.add_argument("--task", default="carrot")
     parser.add_argument("--episodes", type=int, default=10)
     parser.add_argument(

@@ -25,7 +25,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", type=Path, default=Path("configs/experiment.yaml"))
     parser.add_argument("--robot-config", type=Path, default=Path("configs/robot.yaml"))
     parser.add_argument("--backbone", default="ours_rn50")
-    parser.add_argument("--demonstrations", type=int, default=60)
+    parser.add_argument("--demonstrations", type=int, default=80)
     parser.add_argument(
         "--task",
         default="carrot",

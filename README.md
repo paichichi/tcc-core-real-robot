@@ -30,7 +30,7 @@ python scripts/train_policy.py --cache-root runs/feature_cache/ours_rn50 --outpu
 
 ## 执行已发布的 policy
 
-真实 policy 执行默认使用固定的 `ours_rn50`、60-demo policy、carrot 任务、两台
+真实 policy 执行默认使用固定的 `ours_rn50`、80-demo policy、carrot 任务、两台
 已配置的 RealSense、离线 Hugging Face 缓存和完整 359 步：
 
 ```bash
@@ -85,7 +85,7 @@ flat-frame 检查。V4L2 仅作为显式指定的兼容后端，不用于默认 
 ```bash
 python scripts/fetch_policy_assets.py \
   --backbone ours_rn50 \
-  --demonstrations 60
+  --demonstrations 80
 ```
 
 下载完成后，可以使用离线模式再次检查：
@@ -93,7 +93,7 @@ python scripts/fetch_policy_assets.py \
 ```bash
 python scripts/fetch_policy_assets.py \
   --backbone ours_rn50 \
-  --demonstrations 60 \
+  --demonstrations 80 \
   --offline
 ```
 
@@ -119,7 +119,7 @@ find /home/robotarm -path '*/xirl/models.py' -print
 ```bash
 python scripts/eval_demo_first_frames.py \
   --backbone ours_rn50 \
-  --demonstrations 60 \
+  --demonstrations 80 \
   --task carrot \
   --episodes 10 \
   --tcc-source-root /home/robotarm/TCC-core \
@@ -137,7 +137,7 @@ policy 训练和输入预处理，不要继续真实动作执行。
 ```bash
 python scripts/run_policy.py \
   --backbone ours_rn50 \
-  --demonstrations 60 \
+  --demonstrations 80 \
   --task carrot \
   --camera-backend realsense-sdk \
   --cam-main-serial 838212073584 \
@@ -182,7 +182,7 @@ Decision: PASS
 ```bash
 python scripts/run_policy.py \
   --backbone ours_rn50 \
-  --demonstrations 60 \
+  --demonstrations 80 \
   --task carrot \
   --camera-backend realsense-sdk \
   --cam-main-serial 838212073584 \

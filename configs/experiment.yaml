@@ -30,7 +30,7 @@ backbone:
 
 model_hub:
   repository: Chipaipai/tcc-core-real-robot-policies
-  revision: 1a5cb3785b2d4329658aa068705a40652c566962
+  revision: 5ef939242b4bb5d8caef52b83bd09ce8e2ebdb12
   backbone_manifest: backbones/manifest.json
   policy_checkpoint_template: policies/{backbone}/{demonstrations}/checkpoint_050000.pt
   policy_metrics_template: policies/{backbone}/{demonstrations}/metrics.json
@@ -41,7 +41,7 @@ model_hub:
     - r3m_unadapted
     - d4r_imagenet
     - hrp_imagenet
-  supported_demonstrations: [40, 60, 80]
+  supported_demonstrations: [80]
 
 policy:
   implementation: tcc_mlp_bc_v1_future_delta
