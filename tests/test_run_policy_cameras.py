@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,26 @@ def load_run_policy() -> Any:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def test_real_policy_preset_has_short_fixed_defaults(monkeypatch) -> None:
+    module = load_run_policy()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_policy.py", "--execute-policy", "--emergency-stop-ready"],
+    )
+
+    args = module.parse_args()
+
+    assert args.task == "carrot"
+    assert args.backbone == "ours_rn50"
+    assert args.demonstrations == 60
+    assert args.camera_backend == "realsense-sdk"
+    assert args.tcc_source_root == Path("/home/robotarm/TCC-core")
+    assert args.offline is True
+    assert args.execute_policy is True
+    assert args.emergency_stop_ready is True
 
 
 class FakeCapture:

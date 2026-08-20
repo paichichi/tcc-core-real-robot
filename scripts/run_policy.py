@@ -29,7 +29,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--demonstrations", type=int, default=60)
     parser.add_argument(
         "--task",
-        required=True,
+        default="carrot",
         help="Configured task name, or carrot/pineapple/starfruit/strawberry.",
     )
     parser.add_argument(
@@ -54,9 +54,20 @@ def parse_args() -> argparse.Namespace:
         "--cam-wrist",
         help="Legacy V4L2 wrist camera index/path; only used with --camera-backend v4l2.",
     )
-    parser.add_argument("--tcc-source-root", type=Path, required=True)
+    parser.add_argument(
+        "--tcc-source-root",
+        type=Path,
+        default=Path("/home/robotarm/TCC-core"),
+        help="TCC-Core checkout; defaults to the fixed robot-computer path.",
+    )
     parser.add_argument("--hub-cache-dir", type=Path)
-    parser.add_argument("--offline", action="store_true")
+    parser.add_argument("--offline", dest="offline", action="store_true", default=True)
+    parser.add_argument(
+        "--online",
+        dest="offline",
+        action="store_false",
+        help="Allow Hugging Face network access instead of using the local cache.",
+    )
     parser.add_argument("--device", default="auto")
     parser.add_argument("--max-steps", type=int)
     parser.add_argument("--warmup-frames", type=int, default=10)
@@ -88,6 +99,15 @@ def parse_args() -> argparse.Namespace:
             "Execute a short policy rollout after clipping every command to "
             "small per-step and cumulative-from-home limits. Requires "
             "--execute-home and --emergency-stop-ready."
+        ),
+    )
+    parser.add_argument(
+        "--execute-policy",
+        action="store_true",
+        help=(
+            "Run the fixed real-robot preset: dataset home, bounded policy "
+            "actuation, and the configured full rollout length. Still requires "
+            "--emergency-stop-ready."
         ),
     )
     parser.add_argument(
@@ -299,6 +319,11 @@ def main() -> None:
         raise SystemExit("--controller-timeout must be positive")
     config = load_yaml(args.config)
     robot_config = load_yaml(args.robot_config)
+    if args.execute_policy:
+        args.execute_home = True
+        args.execute_clipped_step = True
+        if args.max_steps is None:
+            args.max_steps = int(config["evaluation"]["max_rollout_steps"])
     if args.camera_backend == "realsense-sdk":
         configured_cameras = robot_config["cameras"]
         args.cam_main_serial = args.cam_main_serial or str(

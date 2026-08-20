@@ -1,6 +1,15 @@
 # Real-Robot Policy Evaluation
 
-当前只运行 shadow evaluation：读取两个相机并输出 policy 预测动作，但不会连接或驱动机械臂。
+当前支持 shadow evaluation、受控真实 policy rollout 和 demo replay。真实 policy
+执行默认使用固定的 `ours_rn50`、60-demo policy、carrot 任务、两台已配置的
+RealSense、离线 Hugging Face 缓存和完整 359 步：
+
+```bash
+python scripts/run_policy.py --execute-policy --emergency-stop-ready
+```
+
+需要临时覆盖时可追加参数，例如 `--max-steps 30`、`--task pineapple` 或
+`--online`。
 
 ## 1. 进入项目并激活环境
 
