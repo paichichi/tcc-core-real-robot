@@ -1,2 +1,4 @@
 python scripts/fetch_policy_assets.py --config configs/experiment_proprio_absolute_60.yaml --backbone ours_vit --demonstrations 60
 python scripts/run_policy.py --config configs/experiment_proprio_absolute_60.yaml --backbone ours_vit --demonstrations 60 --task carrot --execute-policy --emergency-stop-ready --max-steps 359
+python scripts/fetch_policy_assets.py --config configs/experiment_proprio_absolute_60.yaml --backbone ours_rn50 --demonstrations 60
+python scripts/run_policy.py --config configs/experiment_proprio_absolute_60.yaml --backbone ours_rn50 --demonstrations 60 --task carrot --execute-policy --emergency-stop-ready --max-steps 359
