@@ -205,6 +205,10 @@ def test_official_hrp_state_is_projected_as_a_second_token() -> None:
     state = torch.randn(4, 7)
     task = torch.zeros(4, dtype=torch.long)
 
+    means, _, logits = policy.mixture_parameters(visual, None, task, state)
+    torch.manual_seed(17)
+    expected_modes = torch.distributions.Categorical(logits=logits).sample()
+    torch.manual_seed(17)
     output = policy(visual, None, task, state)
     loss = policy.negative_log_likelihood(
         torch.randn(4, 7), visual, None, task, state
@@ -213,4 +217,5 @@ def test_official_hrp_state_is_projected_as_a_second_token() -> None:
     assert output.shape == (4, 7)
     assert policy.mlp[0].in_features == 16
     assert policy.state_token[1].out_features == 8
+    assert torch.equal(output, means[torch.arange(4), expected_modes])
     assert torch.isfinite(loss)

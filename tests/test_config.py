@@ -336,3 +336,12 @@ def test_v8_matches_hrp_release_single_view_defaults() -> None:
     assert policy["batch_size"] == 150
     assert policy["learning_rate"] == 0.0003
     assert policy["weight_decay"] == 0.0001
+    assert policy["normalize_state"] is False
+    assert policy["normalize_actions"] is False
+    assert policy["inference"] == "official_zero_std_mixture_sample"
+    assert config["split"] == {
+        "protocol": "hrp_fixed_transition_holdout",
+        "shuffle_seed": 3904767649,
+        "held_out_transitions": 500,
+    }
+    assert config["model_hub"]["supported_demonstrations"] == [100]

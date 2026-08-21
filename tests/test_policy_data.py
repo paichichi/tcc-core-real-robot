@@ -35,6 +35,23 @@ def test_episode_split_has_no_frame_level_leakage(tmp_path: Path) -> None:
         assert by_split["validation"].isdisjoint(by_split["test"])
 
 
+def test_episode_records_can_preserve_source_order_for_hrp(tmp_path: Path) -> None:
+    metadata = tmp_path / "task" / "meta"
+    metadata.mkdir(parents=True)
+    rows = [f'{{"episode_index": {index}}}' for index in range(5)]
+    (metadata / "episodes.jsonl").write_text("\n".join(rows) + "\n")
+
+    records = build_episode_records(
+        tmp_path,
+        ["task"],
+        seed=123,
+        split_sizes=(5, 0, 0),
+        shuffle=False,
+    )
+
+    assert [record.episode_index for record in records] == list(range(5))
+
+
 def test_load_cached_split_filters_episode_ids_per_task(tmp_path: Path) -> None:
     for task_index in range(2):
         for episode_index in range(3):

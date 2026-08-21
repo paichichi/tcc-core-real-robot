@@ -78,16 +78,12 @@ def main() -> None:
     if args.overwrite and output.exists():
         output.unlink()
     output.parent.mkdir(parents=True, exist_ok=True)
-    split = config["split"]
     records = build_episode_records(
         dataset_root,
         list(config["dataset"]["tasks"]),
         int(config["seed"]),
-        (
-            int(split["train_episodes_per_task"]),
-            int(split["validation_episodes_per_task"]),
-            int(split["test_episodes_per_task"]),
-        ),
+        (int(config["dataset"]["demonstrations_per_task"]), 0, 0),
+        shuffle=False,
     )
     if args.limit_episodes is not None:
         records = records[: args.limit_episodes]
@@ -189,6 +185,7 @@ def main() -> None:
             ),
             "jpeg_quality": 95,
             "episodes": len(records),
+            "split_protocol": config["split"],
             "actuation_enabled": False,
         }
         connection.execute(

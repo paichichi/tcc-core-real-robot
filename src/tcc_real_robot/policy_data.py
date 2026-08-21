@@ -36,6 +36,8 @@ def build_episode_records(
     task_names: list[str],
     seed: int,
     split_sizes: tuple[int, int, int],
+    *,
+    shuffle: bool = True,
 ) -> list[EpisodeRecord]:
     """Make deterministic, episode-level train/validation/test splits."""
     root = Path(dataset_root)
@@ -51,7 +53,8 @@ def build_episode_records(
                 f"Split sizes {split_sizes} exceed {task_name}: "
                 f"{len(episode_ids)} episodes"
             )
-        random.Random(seed + task_index).shuffle(episode_ids)
+        if shuffle:
+            random.Random(seed + task_index).shuffle(episode_ids)
         offset = 0
         for split_name, size in zip(split_names, split_sizes):
             for episode_index in episode_ids[offset : offset + size]:

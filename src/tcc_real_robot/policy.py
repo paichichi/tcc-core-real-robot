@@ -444,7 +444,8 @@ class HRPSingleViewGaussianMixturePolicy(nn.Module):
         means, _, logits = self.mixture_parameters(
             cam_main, cam_wrist, task_index, proprioception, progress
         )
-        modes = logits.argmax(dim=-1)
+        # Official HRP samples a categorical mode with effectively zero component std.
+        modes = torch.distributions.Categorical(logits=logits).sample()
         batch = torch.arange(means.shape[0], device=means.device)
         return means[batch, modes]
 

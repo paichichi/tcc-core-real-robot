@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import random
 import sqlite3
 from collections.abc import Callable
 from pathlib import Path
@@ -10,6 +11,19 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 from torchvision.io import decode_jpeg
+
+
+def official_hrp_transition_split(
+    number_of_transitions: int,
+    held_out_transitions: int = 500,
+    shuffle_seed: int = 3904767649,
+) -> tuple[list[int], list[int]]:
+    """Reproduce HRP's fixed shuffled transition-level train/test split."""
+    if number_of_transitions <= held_out_transitions or held_out_transitions <= 0:
+        raise ValueError("HRP split requires more transitions than its holdout")
+    indices = list(range(number_of_transitions))
+    random.Random(shuffle_seed).shuffle(indices)
+    return indices[held_out_transitions:], indices[:held_out_transitions]
 
 
 class HRPImageDataset(Dataset[tuple[torch.Tensor, ...]]):

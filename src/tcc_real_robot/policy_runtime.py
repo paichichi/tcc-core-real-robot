@@ -55,6 +55,9 @@ def validate_policy_contract(
         "rotation_velocity",
         "gripper_action",
         "action_distribution",
+        "inference",
+        "normalize_state",
+        "normalize_actions",
         "architecture",
         "num_modes",
         "dropout",
@@ -108,7 +111,7 @@ def preprocess_rgb_frames(
         images = images.to(device, non_blocking=device.type == "cuda")
     images = images.permute(0, 3, 1, 2).float()
     images.div_(255.0)
-    images = vision_f.resize(images, [image_size, image_size], antialias=True)
+    images = vision_f.resize(images, [image_size, image_size], antialias=False)
     cache_key = (str(images.device), images.dtype)
     statistics = _NORMALIZATION_CACHE.get(cache_key)
     if statistics is None:

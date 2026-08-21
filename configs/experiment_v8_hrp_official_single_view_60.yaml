@@ -27,10 +27,10 @@ model_hub:
   repository: Chipaipai/tcc-core-real-robot-policies
   revision: e40f3fe4a459cc6cbbbf338d07cd651455978213
   backbone_manifest: backbones/manifest.json
-  policy_checkpoint_template: policies_v8_hrp_cartesian_velocity/{backbone}/{demonstrations}/checkpoint_150000.pt
-  policy_metrics_template: policies_v8_hrp_cartesian_velocity/{backbone}/{demonstrations}/metrics.json
+  policy_checkpoint_template: policies_v8_hrp_cartesian_velocity/{backbone}/hrp_official/checkpoint_150000.pt
+  policy_metrics_template: policies_v8_hrp_cartesian_velocity/{backbone}/hrp_official/metrics.json
   supported_backbones: [ours_rn50, ours_vit, r3m_unadapted, d4r_imagenet]
-  supported_demonstrations: [60]
+  supported_demonstrations: [100]
 
 policy:
   implementation: tcc_mlp_bc_v8_hrp_cartesian_velocity
@@ -58,14 +58,16 @@ policy:
   action_distribution: gaussian_mixture
   num_modes: 5
   min_std: 0.0001
-  deterministic_inference: highest_probability_mode_mean
+  deterministic_inference: null
+  inference: official_zero_std_mixture_sample
   hidden_dimensions: [512, 512]
   activation: relu
   dropout: 0.2
   input_batch_norm: true
   input_layer_norm: false
   output_layer_scale: 1.0
-  normalize_actions: true
+  normalize_state: false
+  normalize_actions: false
   optimizer: adam
   weight_decay: 0.0001
   loss: gmm_nll
@@ -86,7 +88,6 @@ evaluation:
   max_rollout_steps: 359
 
 split:
-  train_episodes_per_task: 60
-  validation_episodes_per_task: 20
-  test_episodes_per_task: 20
-  unused_episodes_per_task: 0
+  protocol: hrp_fixed_transition_holdout
+  shuffle_seed: 3904767649
+  held_out_transitions: 500

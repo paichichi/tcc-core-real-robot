@@ -5,9 +5,10 @@ from __future__ import annotations
 import threading
 import time
 from types import TracebackType
-from typing import Any, Self
+from typing import Any
 
 import numpy as np
+from typing_extensions import Self
 
 
 class LatestFramePairBuffer:

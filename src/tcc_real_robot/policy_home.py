@@ -5,7 +5,9 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from math import isfinite
-from typing import Any, Self
+from typing import Any
+
+from typing_extensions import Self
 
 from tcc_real_robot.continuous_control import StatefulPositionLimiter
 from tcc_real_robot.driver_config import apply_motor_parameters, validate_versions

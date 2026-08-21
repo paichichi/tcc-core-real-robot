@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Self
+from typing import Any
 
 import numpy as np
+from typing_extensions import Self
 
 
 class RealSenseColorCameras:

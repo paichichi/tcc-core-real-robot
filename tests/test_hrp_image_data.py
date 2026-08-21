@@ -7,7 +7,26 @@ import pytest
 torch = pytest.importorskip("torch")
 torchvision = pytest.importorskip("torchvision")
 
-from tcc_real_robot.hrp_image_data import HRPImageDataset
+from tcc_real_robot.hrp_image_data import (
+    HRPImageDataset,
+    official_hrp_transition_split,
+)
+
+
+def test_official_hrp_transition_split_is_fixed_and_exhaustive() -> None:
+    train, heldout = official_hrp_transition_split(1000)
+    repeated_train, repeated_heldout = official_hrp_transition_split(1000)
+
+    assert len(train) == 500
+    assert len(heldout) == 500
+    assert set(train).isdisjoint(heldout)
+    assert set(train) | set(heldout) == set(range(1000))
+    assert (train, heldout) == (repeated_train, repeated_heldout)
+
+
+def test_official_hrp_transition_split_rejects_invalid_holdout() -> None:
+    with pytest.raises(ValueError):
+        official_hrp_transition_split(500)
 
 
 def test_hrp_image_dataset_decodes_jpeg_and_velocity_action(tmp_path: Path) -> None:

@@ -7,9 +7,10 @@ import argparse
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Self
+from typing import Any
 
 import numpy as np
+from typing_extensions import Self
 
 from tcc_real_robot.config import load_yaml
 from tcc_real_robot.model_assets import (

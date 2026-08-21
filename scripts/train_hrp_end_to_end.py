@@ -13,10 +13,13 @@ from pathlib import Path
 import numpy as np
 import torch
 import yaml
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, RandomSampler, Subset
 from torchvision import transforms
 
-from tcc_real_robot.hrp_image_data import HRPImageDataset
+from tcc_real_robot.hrp_image_data import (
+    HRPImageDataset,
+    official_hrp_transition_split,
+)
 from tcc_real_robot.model_assets import resolve_backbone_asset
 from tcc_real_robot.policy import (
     ActionNormalizer,
@@ -55,14 +58,14 @@ def image_transform(image_size: int, training: bool) -> transforms.Compose:
         operations.extend(
             [
                 transforms.RandomResizedCrop(
-                    image_size, scale=(0.9, 1.0), antialias=True
+                    image_size, scale=(0.9, 1.0), antialias=False
                 ),
                 transforms.GaussianBlur(kernel_size=kernel),
             ]
         )
     else:
         operations.append(
-            transforms.Resize((image_size, image_size), antialias=True)
+            transforms.Resize((image_size, image_size), antialias=False)
         )
     operations.append(
         transforms.Normalize(
@@ -83,7 +86,7 @@ def save_checkpoint(
     state_normalizer: ActionNormalizer,
     action_normalizer: ActionNormalizer,
     step: int,
-    validation_loss: float,
+    heldout_loss: float,
 ) -> None:
     torch.save(
         {
@@ -102,7 +105,7 @@ def save_checkpoint(
             "backbone_metadata": metadata,
             "config": config,
             "step": step,
-            "best_validation_normalized_loss": validation_loss,
+            "heldout_raw_gmm_nll": heldout_loss,
             "loss": "gmm_nll",
             "actuation_enabled": False,
         },
@@ -175,20 +178,26 @@ def main() -> None:
     )
     train_transform = image_transform(int(metadata["image_size"]), True)
     eval_transform = image_transform(int(metadata["image_size"]), False)
-    train_data = HRPImageDataset(
+    all_train_views = HRPImageDataset(
         args.image_buffer, "train", transform=train_transform
     )
-    validation_data = HRPImageDataset(
-        args.image_buffer, "validation", transform=eval_transform
+    all_eval_views = HRPImageDataset(
+        args.image_buffer, "train", transform=eval_transform
     )
-    test_data = HRPImageDataset(
-        args.image_buffer, "test", transform=eval_transform
+    split_config = config["split"]
+    if split_config["protocol"] != "hrp_fixed_transition_holdout":
+        raise ValueError("Official HRP training requires its transition holdout")
+    train_indices, heldout_indices = official_hrp_transition_split(
+        len(all_train_views),
+        held_out_transitions=int(split_config["held_out_transitions"]),
+        shuffle_seed=int(split_config["shuffle_seed"]),
     )
-    state_mean, state_std, action_mean, action_std = (
-        train_data.state_action_statistics()
-    )
-    state_normalizer = ActionNormalizer(state_mean, state_std).to(device)
-    action_normalizer = ActionNormalizer(action_mean, action_std).to(device)
+    train_data = Subset(all_train_views, train_indices)
+    heldout_data = Subset(all_eval_views, heldout_indices)
+    identity_mean = torch.zeros(int(policy_config["action_dim"]))
+    identity_std = torch.ones(int(policy_config["action_dim"]))
+    state_normalizer = ActionNormalizer(identity_mean, identity_std).to(device)
+    action_normalizer = ActionNormalizer(identity_mean, identity_std).to(device)
     model = HRPSingleViewGaussianMixturePolicy(
         feature_dim=int(metadata["feature_dim"]),
         action_dim=int(policy_config["action_dim"]),
@@ -204,41 +213,52 @@ def main() -> None:
         else int(policy_config["num_workers"])
     )
     batch_size = int(policy_config["batch_size"])
+    iterations = args.iterations or int(policy_config["training_steps"])
+    train_sampler = RandomSampler(
+        train_data,
+        replacement=True,
+        num_samples=iterations * batch_size,
+        generator=torch.Generator().manual_seed(seed),
+    )
     train_loader = DataLoader(
         train_data,
         batch_size=batch_size,
-        shuffle=True,
+        sampler=train_sampler,
         num_workers=workers,
         pin_memory=device.type == "cuda",
         persistent_workers=workers > 0,
         drop_last=True,
-        generator=torch.Generator().manual_seed(seed),
     )
-    validation_loader = DataLoader(
-        validation_data, batch_size=batch_size, shuffle=False, num_workers=workers
-    )
-    test_loader = DataLoader(
-        test_data, batch_size=batch_size, shuffle=False, num_workers=workers
+    heldout_loader = DataLoader(
+        heldout_data,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=min(workers, 4),
     )
     optimizer = torch.optim.Adam(
         chain(backbone.parameters(), model.parameters()),
         lr=float(policy_config["learning_rate"]),
         weight_decay=float(policy_config["weight_decay"]),
     )
-    iterations = args.iterations or int(policy_config["training_steps"])
     eval_every = int(policy_config["eval_every"])
-    eval_samples = int(policy_config["evaluation_samples"])
+    heldout_samples = int(split_config["held_out_transitions"])
     output_dir = args.output_dir.expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     history = []
-    best_loss = float("inf")
     train_iterator = iter(train_loader)
+    save_checkpoint(
+        output_dir / "checkpoint_000000.pt",
+        backbone=backbone,
+        model=model,
+        config=config,
+        metadata=metadata,
+        state_normalizer=state_normalizer,
+        action_normalizer=action_normalizer,
+        step=0,
+        heldout_loss=float("nan"),
+    )
     for step in range(1, iterations + 1):
-        try:
-            images, states, actions, tasks = next(train_iterator)
-        except StopIteration:
-            train_iterator = iter(train_loader)
-            images, states, actions, tasks = next(train_iterator)
+        images, states, actions, tasks = next(train_iterator)
         images = images.to(device, non_blocking=True)
         states = states.to(device, non_blocking=True)
         actions = actions.to(device, non_blocking=True)
@@ -266,70 +286,45 @@ def main() -> None:
                 )
             )
         if step % eval_every == 0 or step == iterations:
-            validation_loss, validation_mae = evaluate(
+            heldout_loss, heldout_mae = evaluate(
                 backbone,
                 model,
-                validation_loader,
+                heldout_loader,
                 state_normalizer,
                 action_normalizer,
                 device,
-                eval_samples,
+                heldout_samples,
             )
             row = {
                 "step": step,
-                "validation_gmm_nll": validation_loss,
-                "validation_velocity_mae": validation_mae,
+                "heldout_raw_gmm_nll": heldout_loss,
+                "heldout_velocity_mae": heldout_mae,
             }
             history.append(row)
             print(json.dumps(row, sort_keys=True))
-            if validation_loss < best_loss:
-                best_loss = validation_loss
-                save_checkpoint(
-                    output_dir / "checkpoint_best.pt",
-                    backbone=backbone,
-                    model=model,
-                    config=config,
-                    metadata=metadata,
-                    state_normalizer=state_normalizer,
-                    action_normalizer=action_normalizer,
-                    step=step,
-                    validation_loss=validation_loss,
-                )
-    save_checkpoint(
-        output_dir / "checkpoint_last.pt",
-        backbone=backbone,
-        model=model,
-        config=config,
-        metadata=metadata,
-        state_normalizer=state_normalizer,
-        action_normalizer=action_normalizer,
-        step=iterations,
-        validation_loss=best_loss,
-    )
-    best_checkpoint = torch.load(
-        output_dir / "checkpoint_best.pt", map_location=device, weights_only=False
-    )
-    backbone.load_state_dict(best_checkpoint["backbone_model"])
-    model.load_state_dict(best_checkpoint["model"])
-    test_loss, test_mae = evaluate(
-        backbone,
-        model,
-        test_loader,
-        state_normalizer,
-        action_normalizer,
-        device,
-        eval_samples,
-    )
+            save_checkpoint(
+                output_dir / f"checkpoint_{step:06d}.pt",
+                backbone=backbone,
+                model=model,
+                config=config,
+                metadata=metadata,
+                state_normalizer=state_normalizer,
+                action_normalizer=action_normalizer,
+                step=step,
+                heldout_loss=heldout_loss,
+            )
     shutil.copyfile(
-        output_dir / "checkpoint_best.pt",
         output_dir / f"checkpoint_{iterations:06d}.pt",
+        output_dir / "checkpoint_last.pt",
     )
     metrics = {
         "history": history,
-        "best_validation_gmm_nll": best_loss,
-        "test_gmm_nll": test_loss,
-        "test_velocity_mae": test_mae,
+        "split_protocol": split_config,
+        "train_transitions": len(train_indices),
+        "heldout_transitions": len(heldout_indices),
         "training_iterations": iterations,
+        "state_normalization": False,
+        "action_normalization": False,
     }
     (output_dir / "metrics.json").write_text(json.dumps(metrics, indent=2) + "\n")
 
