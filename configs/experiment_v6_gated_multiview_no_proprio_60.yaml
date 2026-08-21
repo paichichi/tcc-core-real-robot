@@ -28,10 +28,10 @@ backbone:
 
 model_hub:
   repository: Chipaipai/tcc-core-real-robot-policies
-  revision: 94dc379f5ee00d7e410ac211396cd06d9e65953a
+  revision: e40f3fe4a459cc6cbbbf338d07cd651455978213
   backbone_manifest: backbones/manifest.json
-  policy_checkpoint_template: policies/{backbone}/{demonstrations}/checkpoint_050000.pt
-  policy_metrics_template: policies/{backbone}/{demonstrations}/metrics.json
+  policy_checkpoint_template: policies_v6_no_proprio/{backbone}/{demonstrations}/checkpoint_050000.pt
+  policy_metrics_template: policies_v6_no_proprio/{backbone}/{demonstrations}/metrics.json
   supported_backbones:
     - ours_rn50
     - ours_vit
@@ -40,7 +40,7 @@ model_hub:
   supported_demonstrations: [60]
 
 policy:
-  implementation: tcc_mlp_bc_v6_gated_multiview_no_proprio
+  implementation: tcc_mlp_bc_v6_gated_multiview_proprio
   cameras: [cam_main, cam_wrist]
   shared_camera_backbone: true
   camera_fusion: gated_residual

@@ -248,9 +248,7 @@ def test_v6_gated_multiview_no_proprio_policy_configuration() -> None:
         ROOT / "configs" / "experiment_v6_gated_multiview_no_proprio_60.yaml"
     )
     policy = config["policy"]
-    assert policy["implementation"] == (
-        "tcc_mlp_bc_v6_gated_multiview_no_proprio"
-    )
+    assert policy["implementation"] == "tcc_mlp_bc_v6_gated_multiview_proprio"
     assert policy["cameras"] == ["cam_main", "cam_wrist"]
     assert policy["camera_fusion"] == "gated_residual"
     assert policy["camera_projection_dim"] == 128
@@ -267,6 +265,15 @@ def test_v6_gated_multiview_no_proprio_policy_configuration() -> None:
         "r3m_unadapted",
         "d4r_imagenet",
     ]
+    assert config["model_hub"]["revision"] == (
+        "e40f3fe4a459cc6cbbbf338d07cd651455978213"
+    )
+    assert config["model_hub"]["policy_checkpoint_template"].startswith(
+        "policies_v6_no_proprio/"
+    )
+    assert config["model_hub"]["policy_metrics_template"].startswith(
+        "policies_v6_no_proprio/"
+    )
 
 
 def test_model_hub_is_pinned_to_an_immutable_revision() -> None:

@@ -1,18 +1,15 @@
-python scripts/cache_policy_features.py --config configs/experiment_v6_gated_multiview_no_proprio_60.yaml --hub-backbone ours_rn50 --dataset-root datasets/pick_and_place_4_object_diverse --tcc-source-root /home/robotarm/TCC-core --cache-root runs/feature_cache_v6/ours_rn50/60 --device auto
+python scripts/fetch_policy_assets.py --config configs/experiment_v6_gated_multiview_no_proprio_60.yaml --backbone ours_rn50 --demonstrations 60
 
-python scripts/train_policy.py --config configs/experiment_v6_gated_multiview_no_proprio_60.yaml --cache-root runs/feature_cache_v6/ours_rn50/60 --output-dir runs/tcc_mlp_bc_v6_no_proprio/ours_rn50/60 --device auto
+python scripts/run_policy.py --config configs/experiment_v6_gated_multiview_no_proprio_60.yaml --backbone ours_rn50 --demonstrations 60 --task carrot --offline --device auto --execute-policy --emergency-stop-ready
 
+python scripts/fetch_policy_assets.py --config configs/experiment_v6_gated_multiview_no_proprio_60.yaml --backbone ours_vit --demonstrations 60
 
-python scripts/cache_policy_features.py --config configs/experiment_v6_gated_multiview_no_proprio_60.yaml --hub-backbone ours_vit --dataset-root datasets/pick_and_place_4_object_diverse --tcc-source-root /home/robotarm/TCC-core --cache-root runs/feature_cache_v6/ours_vit/60 --device auto
+python scripts/run_policy.py --config configs/experiment_v6_gated_multiview_no_proprio_60.yaml --backbone ours_vit --demonstrations 60 --task carrot --offline --device auto --execute-policy --emergency-stop-ready
 
-python scripts/train_policy.py --config configs/experiment_v6_gated_multiview_no_proprio_60.yaml --cache-root runs/feature_cache_v6/ours_vit/60 --output-dir runs/tcc_mlp_bc_v6_no_proprio/ours_vit/60 --device auto
+python scripts/fetch_policy_assets.py --config configs/experiment_v6_gated_multiview_no_proprio_60.yaml --backbone r3m_unadapted --demonstrations 60
 
+python scripts/run_policy.py --config configs/experiment_v6_gated_multiview_no_proprio_60.yaml --backbone r3m_unadapted --demonstrations 60 --task carrot --offline --device auto --execute-policy --emergency-stop-ready
 
-python scripts/cache_policy_features.py --config configs/experiment_v6_gated_multiview_no_proprio_60.yaml --hub-backbone r3m_unadapted --dataset-root datasets/pick_and_place_4_object_diverse --tcc-source-root /home/robotarm/TCC-core --cache-root runs/feature_cache_v6/r3m_unadapted/60 --device auto
+python scripts/fetch_policy_assets.py --config configs/experiment_v6_gated_multiview_no_proprio_60.yaml --backbone d4r_imagenet --demonstrations 60
 
-python scripts/train_policy.py --config configs/experiment_v6_gated_multiview_no_proprio_60.yaml --cache-root runs/feature_cache_v6/r3m_unadapted/60 --output-dir runs/tcc_mlp_bc_v6_no_proprio/r3m_unadapted/60 --device auto
-
-
-python scripts/cache_policy_features.py --config configs/experiment_v6_gated_multiview_no_proprio_60.yaml --hub-backbone d4r_imagenet --dataset-root datasets/pick_and_place_4_object_diverse --tcc-source-root /home/robotarm/TCC-core --cache-root runs/feature_cache_v6/d4r_imagenet/60 --device auto
-
-python scripts/train_policy.py --config configs/experiment_v6_gated_multiview_no_proprio_60.yaml --cache-root runs/feature_cache_v6/d4r_imagenet/60 --output-dir runs/tcc_mlp_bc_v6_no_proprio/d4r_imagenet/60 --device auto
+python scripts/run_policy.py --config configs/experiment_v6_gated_multiview_no_proprio_60.yaml --backbone d4r_imagenet --demonstrations 60 --task carrot --offline --device auto --execute-policy --emergency-stop-ready
