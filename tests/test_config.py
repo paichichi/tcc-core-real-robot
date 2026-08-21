@@ -233,6 +233,10 @@ def test_v6_gated_multiview_proprio_policy_configuration() -> None:
     assert config["model_hub"]["supported_backbones"] == [
         "ours_rn50",
         "ours_vit",
+        "hralign",
+        "r3m_unadapted",
+        "d4r_imagenet",
+        "hrp_imagenet",
     ]
     assert config["model_hub"]["revision"] == (
         "94dc379f5ee00d7e410ac211396cd06d9e65953a"

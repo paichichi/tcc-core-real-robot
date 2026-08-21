@@ -32,7 +32,13 @@ model_hub:
   backbone_manifest: backbones/manifest.json
   policy_checkpoint_template: policies/{backbone}/{demonstrations}/checkpoint_050000.pt
   policy_metrics_template: policies/{backbone}/{demonstrations}/metrics.json
-  supported_backbones: [ours_rn50, ours_vit]
+  supported_backbones:
+    - ours_rn50
+    - ours_vit
+    - hralign
+    - r3m_unadapted
+    - d4r_imagenet
+    - hrp_imagenet
   supported_demonstrations: [60]
 
 policy:
