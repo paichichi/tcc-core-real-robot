@@ -1,16 +1,4 @@
-cd /home/robotarm/tcc-core-real-robot
-source .venv/bin/activate
-
-# Build feature caches with the frozen backbones.
-python scripts/cache_policy_features.py --config configs/experiment_r3m_mlp_60.yaml --hub-backbone ours_vit --dataset-root datasets/pick_and_place_4_object_diverse --tcc-source-root /home/robotarm/TCC-core --cache-root runs/feature_cache_r3m/ours_vit/60 --device auto
-python scripts/cache_policy_features.py --config configs/experiment_r3m_mlp_60.yaml --hub-backbone ours_rn50 --dataset-root datasets/pick_and_place_4_object_diverse --tcc-source-root /home/robotarm/TCC-core --cache-root runs/feature_cache_r3m/ours_rn50/60 --device auto
-
-# Train the R3M-style MLP heads.
-python scripts/train_policy.py --config configs/experiment_r3m_mlp_60.yaml --cache-root runs/feature_cache_r3m/ours_vit/60 --output-dir runs/tcc_mlp_bc_r3m/ours_vit/60 --device auto
-python scripts/train_policy.py --config configs/experiment_r3m_mlp_60.yaml --cache-root runs/feature_cache_r3m/ours_rn50/60 --output-dir runs/tcc_mlp_bc_r3m/ours_rn50/60 --device auto
-
-# Shadow evaluation: cameras and policy run, but no action is sent to the arm.
-python scripts/run_policy.py --config configs/experiment_r3m_mlp_60.yaml --backbone ours_vit --demonstrations 60 --policy-checkpoint runs/tcc_mlp_bc_r3m/ours_vit/60/checkpoint_050000.pt --task carrot --online --max-steps 359
-
-# Real execution through the existing official Trossen driver adapter.
-python scripts/run_policy.py --config configs/experiment_r3m_mlp_60.yaml --backbone ours_vit --demonstrations 60 --policy-checkpoint runs/tcc_mlp_bc_r3m/ours_vit/60/checkpoint_050000.pt --task carrot --online --max-steps 359 --execute-policy --emergency-stop-ready
+python scripts/fetch_policy_assets.py --config configs/experiment_r3m_mlp_60.yaml --backbone ours_vit --demonstrations 60
+python scripts/run_policy.py --config configs/experiment_r3m_mlp_60.yaml --backbone ours_vit --demonstrations 60 --task carrot --max-steps 359 --execute-policy --emergency-stop-ready
+python scripts/fetch_policy_assets.py --config configs/experiment_r3m_mlp_60.yaml --backbone ours_rn50 --demonstrations 60
+python scripts/run_policy.py --config configs/experiment_r3m_mlp_60.yaml --backbone ours_rn50 --demonstrations 60 --task carrot --max-steps 359 --execute-policy --emergency-stop-ready
