@@ -18,7 +18,7 @@ from tcc_real_robot.policy_data import (
     build_episode_records,
     cache_shard_path,
 )
-from tcc_real_robot.policy_runtime import preprocess_rgb_frames
+from tcc_real_robot.policy_runtime import preprocess_rgb_frames, resolve_device
 from tcc_real_robot.tcc_backbone import load_frozen_tcc_backbone
 
 
@@ -32,7 +32,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tcc-source-root", type=Path)
     parser.add_argument("--dataset-root", type=Path)
     parser.add_argument("--cache-root", type=Path, default=Path("runs/feature_cache"))
-    parser.add_argument("--device", default="cuda:0")
+    parser.add_argument("--device", default="auto")
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--limit-episodes", type=int)
@@ -113,7 +113,8 @@ def main() -> None:
         "backbone.tcc_source_root",
     )
     cache_root = args.cache_root.expanduser().resolve()
-    device = torch.device(args.device)
+    device = resolve_device(args.device)
+    print(f"Feature extraction device: {device}")
     backbone, metadata = load_frozen_tcc_backbone(checkpoint, source_root, device)
 
     split = config["split"]

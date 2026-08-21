@@ -685,6 +685,7 @@ def main() -> None:
                         device,
                         observation_state=warm_state,
                         execution_delta_gain_override=runtime_execution_delta_gain,
+                        episode_progress=0.0,
                     )
                 if home_session is not None:
                     home_reference = home_session.read_positions()
@@ -738,6 +739,9 @@ def main() -> None:
                         device,
                         observation_state=policy_state,
                         execution_delta_gain_override=runtime_execution_delta_gain,
+                        episode_progress=min(
+                            step / max(dataset_rollout_steps - 1, 1), 1.0
+                        ),
                     )
                     action = raw_action
                     if action_filter is not None:

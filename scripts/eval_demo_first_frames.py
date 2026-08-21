@@ -148,6 +148,7 @@ def main() -> None:
                 int(backbone_metadata["image_size"]),
                 device,
                 observation_state=state,
+                episode_progress=0.0,
             )
             .numpy()
             .astype(np.float64)
