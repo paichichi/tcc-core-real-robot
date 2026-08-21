@@ -45,6 +45,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", default="auto")
     parser.add_argument("--iterations", type=int)
     parser.add_argument("--num-workers", type=int)
+    parser.add_argument(
+        "--freeze-backbone",
+        action="store_true",
+        help="Keep the visual backbone fixed and train only the HRP MLP-GMM head.",
+    )
     return parser.parse_args()
 
 
@@ -122,6 +127,8 @@ def evaluate(
     action_normalizer: ActionNormalizer,
     device: torch.device,
     max_samples: int,
+    *,
+    train_backbone: bool,
 ) -> tuple[float, float]:
     backbone.eval()
     model.eval()
@@ -149,7 +156,8 @@ def evaluate(
         loss_total += float(loss) * batch_count
         error_total += float(torch.abs(prediction - actions).mean()) * batch_count
         count += batch_count
-    backbone.train()
+    if train_backbone:
+        backbone.train()
     model.train()
     return loss_total / count, error_total / count
 
@@ -176,6 +184,9 @@ def main() -> None:
     backbone, metadata = load_trainable_tcc_backbone(
         asset, args.tcc_source_root, device
     )
+    train_backbone = not args.freeze_backbone
+    backbone.requires_grad_(train_backbone)
+    backbone.train(train_backbone)
     train_transform = image_transform(int(metadata["image_size"]), True)
     eval_transform = image_transform(int(metadata["image_size"]), False)
     all_train_views = HRPImageDataset(
@@ -235,8 +246,13 @@ def main() -> None:
         shuffle=False,
         num_workers=min(workers, 4),
     )
+    optimized_parameters = (
+        chain(backbone.parameters(), model.parameters())
+        if train_backbone
+        else model.parameters()
+    )
     optimizer = torch.optim.Adam(
-        chain(backbone.parameters(), model.parameters()),
+        optimized_parameters,
         lr=float(policy_config["learning_rate"]),
         weight_decay=float(policy_config["weight_decay"]),
     )
@@ -268,7 +284,11 @@ def main() -> None:
             dtype=torch.bfloat16,
             enabled=device.type == "cuda",
         ):
-            features = backbone(images).float()
+            if train_backbone:
+                features = backbone(images).float()
+            else:
+                with torch.no_grad():
+                    features = backbone(images).float()
             loss = model.negative_log_likelihood(
                 action_normalizer.normalize(actions),
                 features,
@@ -294,6 +314,7 @@ def main() -> None:
                 action_normalizer,
                 device,
                 heldout_samples,
+                train_backbone=train_backbone,
             )
             row = {
                 "step": step,
@@ -325,6 +346,7 @@ def main() -> None:
         "training_iterations": iterations,
         "state_normalization": False,
         "action_normalization": False,
+        "backbone_frozen": not train_backbone,
     }
     (output_dir / "metrics.json").write_text(json.dumps(metrics, indent=2) + "\n")
 
