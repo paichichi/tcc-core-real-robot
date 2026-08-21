@@ -44,6 +44,7 @@ class TCCMLPPolicy(nn.Module):
         camera_fusion: str = "raw_concat",
         camera_projection_dim: int = 0,
         camera_gate_hidden_dim: int = 0,
+        dropout: float = 0.0,
     ) -> None:
         super().__init__()
         if proprio_dim < 0 or progress_dim < 0:
@@ -56,6 +57,8 @@ class TCCMLPPolicy(nn.Module):
             raise ValueError("Choose at most one input normalization layer")
         if output_layer_scale <= 0:
             raise ValueError("Output-layer scale must be positive")
+        if not 0.0 <= dropout < 1.0:
+            raise ValueError("Dropout must be in [0, 1)")
         if camera_projection_dim < 0:
             raise ValueError("Camera projection dimension cannot be negative")
         if camera_gate_hidden_dim < 0:
@@ -94,6 +97,7 @@ class TCCMLPPolicy(nn.Module):
         self.camera_fusion = camera_fusion
         self.camera_projection_dim = camera_projection_dim
         self.camera_gate_hidden_dim = camera_gate_hidden_dim
+        self.dropout = dropout
         projected_feature_dim = camera_projection_dim or feature_dim
         if camera_projection_dim:
             self.cam_main_projection: nn.Module = self._make_projection(
@@ -138,6 +142,8 @@ class TCCMLPPolicy(nn.Module):
         previous = input_dim
         for width in hidden_dims:
             layers.extend((nn.Linear(previous, width), nn.ReLU()))
+            if dropout:
+                layers.append(nn.Dropout(dropout))
             previous = width
         output_layer = nn.Linear(previous, action_dim)
         with torch.no_grad():
@@ -165,6 +171,25 @@ class TCCMLPPolicy(nn.Module):
         proprioception: torch.Tensor | None = None,
         progress: torch.Tensor | None = None,
     ) -> torch.Tensor:
+        return self.mlp(
+            self._policy_inputs(
+                cam_main,
+                cam_wrist,
+                task_index,
+                proprioception,
+                progress,
+            )
+        )
+
+    def _policy_inputs(
+        self,
+        cam_main: torch.Tensor,
+        cam_wrist: torch.Tensor | None,
+        task_index: torch.Tensor,
+        proprioception: torch.Tensor | None = None,
+        progress: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Build the shared visual/state input consumed by a policy head."""
         if cam_main.ndim != 2 or cam_main.shape[1] != self.feature_dim:
             raise ValueError(
                 f"Expected camera features [B, {self.feature_dim}], "
@@ -207,4 +232,238 @@ class TCCMLPPolicy(nn.Module):
             visual_inputs = [main_embedding]
             if wrist_embedding is not None:
                 visual_inputs.append(wrist_embedding)
-        return self.mlp(torch.cat([*visual_inputs, *conditioning], dim=-1))
+        return torch.cat([*visual_inputs, *conditioning], dim=-1)
+
+
+class TCCMLPGaussianMixturePolicy(TCCMLPPolicy):
+    """HRP-style MLP policy with a Gaussian-mixture action head."""
+
+    def __init__(
+        self,
+        *args: object,
+        num_modes: int = 5,
+        min_std: float = 1e-4,
+        **kwargs: object,
+    ) -> None:
+        if num_modes < 2:
+            raise ValueError("A Gaussian-mixture policy requires at least two modes")
+        if min_std <= 0:
+            raise ValueError("Minimum standard deviation must be positive")
+        super().__init__(*args, **kwargs)
+        output_layer = self.mlp[-1]
+        if not isinstance(output_layer, nn.Linear):
+            raise TypeError("Expected the base policy to end in a linear layer")
+        hidden_dim = output_layer.in_features
+        self.mlp = nn.Sequential(*list(self.mlp.children())[:-1])
+        self.num_modes = num_modes
+        self.min_std = min_std
+        self.mixture_means = nn.Linear(hidden_dim, num_modes * self.action_dim)
+        self.mixture_scales = nn.Linear(hidden_dim, num_modes * self.action_dim)
+        self.mixture_logits = nn.Linear(hidden_dim, num_modes)
+
+    def mixture_parameters(
+        self,
+        cam_main: torch.Tensor,
+        cam_wrist: torch.Tensor | None,
+        task_index: torch.Tensor,
+        proprioception: torch.Tensor | None = None,
+        progress: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        inputs = self._policy_inputs(
+            cam_main,
+            cam_wrist,
+            task_index,
+            proprioception,
+            progress,
+        )
+        hidden = self.mlp(inputs)
+        batch = hidden.shape[0]
+        means = self.mixture_means(hidden).reshape(
+            batch, self.num_modes, self.action_dim
+        )
+        scales = F.softplus(self.mixture_scales(hidden)).reshape(
+            batch, self.num_modes, self.action_dim
+        )
+        scales = scales + self.min_std
+        logits = self.mixture_logits(hidden)
+        return means, scales, logits
+
+    def forward(
+        self,
+        cam_main: torch.Tensor,
+        cam_wrist: torch.Tensor | None,
+        task_index: torch.Tensor,
+        proprioception: torch.Tensor | None = None,
+        progress: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Return the mean of the most probable mode for deterministic control."""
+        means, _, logits = self.mixture_parameters(
+            cam_main,
+            cam_wrist,
+            task_index,
+            proprioception,
+            progress,
+        )
+        modes = logits.argmax(dim=-1)
+        batch = torch.arange(means.shape[0], device=means.device)
+        return means[batch, modes]
+
+    def negative_log_likelihood(
+        self,
+        target: torch.Tensor,
+        cam_main: torch.Tensor,
+        cam_wrist: torch.Tensor | None,
+        task_index: torch.Tensor,
+        proprioception: torch.Tensor | None = None,
+        progress: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Return mean negative log likelihood of normalized expert actions."""
+        if target.ndim != 2 or target.shape[1] != self.action_dim:
+            raise ValueError(
+                f"Expected action targets [B, {self.action_dim}], got {target.shape}"
+            )
+        means, scales, logits = self.mixture_parameters(
+            cam_main,
+            cam_wrist,
+            task_index,
+            proprioception,
+            progress,
+        )
+        components = torch.distributions.Independent(
+            torch.distributions.Normal(means, scales), 1
+        )
+        mixture = torch.distributions.Categorical(logits=logits)
+        distribution = torch.distributions.MixtureSameFamily(mixture, components)
+        return -distribution.log_prob(target).mean()
+
+
+class HRPSingleViewGaussianMixturePolicy(nn.Module):
+    """Single-view state-token MLP-GMM used by the official HRP BC pipeline."""
+
+    camera_names = ("cam_main",)
+    camera_fusion = "raw_concat"
+    camera_projection_dim = 0
+    camera_gate_hidden_dim = 0
+    progress_dim = 0
+
+    def __init__(
+        self,
+        feature_dim: int,
+        action_dim: int = 7,
+        state_dim: int = 7,
+        hidden_dims: Sequence[int] = (512, 512),
+        num_modes: int = 5,
+        dropout: float = 0.2,
+        min_std: float = 1e-4,
+    ) -> None:
+        super().__init__()
+        if feature_dim < 1 or action_dim < 1 or state_dim < 1:
+            raise ValueError("HRP dimensions must be positive")
+        if not hidden_dims or any(width < 1 for width in hidden_dims):
+            raise ValueError("HRP requires positive hidden dimensions")
+        if num_modes < 2 or not 0.0 <= dropout < 1.0 or min_std <= 0:
+            raise ValueError("Invalid HRP mixture/dropout configuration")
+        self.feature_dim = feature_dim
+        self.action_dim = action_dim
+        self.proprio_dim = state_dim
+        self.num_modes = num_modes
+        self.min_std = min_std
+        self.state_token = nn.Sequential(
+            nn.Dropout(0.2),
+            nn.Linear(state_dim, feature_dim),
+        )
+        self.token_batch_norm = nn.BatchNorm1d(feature_dim)
+        self.token_dropout = nn.Dropout(dropout)
+        layers: list[nn.Module] = []
+        previous = 2 * feature_dim
+        for width in hidden_dims:
+            layers.extend(
+                (nn.Linear(previous, width), nn.ReLU(), nn.Dropout(dropout))
+            )
+            previous = width
+        self.mlp = nn.Sequential(*layers)
+        self.mixture_means = nn.Linear(previous, num_modes * action_dim)
+        self.mixture_scales = nn.Linear(previous, num_modes * action_dim)
+        self.mixture_logits = nn.Linear(previous, num_modes)
+
+    def _hidden(
+        self,
+        cam_main: torch.Tensor,
+        cam_wrist: torch.Tensor | None,
+        task_index: torch.Tensor,
+        proprioception: torch.Tensor | None,
+        progress: torch.Tensor | None,
+    ) -> torch.Tensor:
+        if cam_main.ndim != 2 or cam_main.shape[1] != self.feature_dim:
+            raise ValueError("Unexpected HRP visual feature shape")
+        if proprioception is None or proprioception.shape != (
+            cam_main.shape[0],
+            self.proprio_dim,
+        ):
+            raise ValueError("HRP policy requires normalized robot state")
+        if cam_wrist is not None or progress is not None:
+            raise ValueError("Official single-view HRP accepts no wrist/progress input")
+        if task_index.shape != (cam_main.shape[0],) or bool(
+            torch.any(task_index != 0)
+        ):
+            raise ValueError("Official HRP policy is trained separately per task")
+        state = self.state_token(proprioception)
+        tokens = torch.stack((cam_main, state), dim=1)
+        tokens = self.token_batch_norm(tokens.transpose(1, 2)).transpose(1, 2)
+        return self.mlp(self.token_dropout(tokens).flatten(1))
+
+    def mixture_parameters(
+        self,
+        cam_main: torch.Tensor,
+        cam_wrist: torch.Tensor | None,
+        task_index: torch.Tensor,
+        proprioception: torch.Tensor | None = None,
+        progress: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        hidden = self._hidden(
+            cam_main, cam_wrist, task_index, proprioception, progress
+        )
+        batch = hidden.shape[0]
+        means = self.mixture_means(hidden).reshape(
+            batch, self.num_modes, self.action_dim
+        )
+        scales = F.softplus(self.mixture_scales(hidden)).reshape(
+            batch, self.num_modes, self.action_dim
+        )
+        logits = self.mixture_logits(hidden)
+        return means, scales + self.min_std, logits
+
+    def forward(
+        self,
+        cam_main: torch.Tensor,
+        cam_wrist: torch.Tensor | None,
+        task_index: torch.Tensor,
+        proprioception: torch.Tensor | None = None,
+        progress: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        means, _, logits = self.mixture_parameters(
+            cam_main, cam_wrist, task_index, proprioception, progress
+        )
+        modes = logits.argmax(dim=-1)
+        batch = torch.arange(means.shape[0], device=means.device)
+        return means[batch, modes]
+
+    def negative_log_likelihood(
+        self,
+        target: torch.Tensor,
+        cam_main: torch.Tensor,
+        cam_wrist: torch.Tensor | None,
+        task_index: torch.Tensor,
+        proprioception: torch.Tensor | None = None,
+        progress: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        means, scales, logits = self.mixture_parameters(
+            cam_main, cam_wrist, task_index, proprioception, progress
+        )
+        components = torch.distributions.Independent(
+            torch.distributions.Normal(means, scales), 1
+        )
+        distribution = torch.distributions.MixtureSameFamily(
+            torch.distributions.Categorical(logits=logits), components
+        )
+        return -distribution.log_prob(target).mean()

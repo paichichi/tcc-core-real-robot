@@ -192,3 +192,24 @@ def load_cached_future_delta_split(
             "progress",
         )
     }
+
+
+def load_cached_current_delta_split(
+    cache_root: str | Path,
+    split: str,
+    episode_ids_by_task: dict[int, set[int]] | None = None,
+) -> dict[str, torch.Tensor]:
+    """Load current observations with one-step joint-command delta labels.
+
+    The dataset stores absolute joint/gripper commands. HRP predicts velocity-like
+    increments, so the closest measured target available here is
+    ``action[t] - state[t]``. Conversion happens independently inside every
+    episode and never crosses a trajectory boundary.
+    """
+    data = load_cached_split(
+        cache_root,
+        split,
+        episode_ids_by_task=episode_ids_by_task,
+    )
+    data["action"] = data["action"] - data["state"]
+    return data

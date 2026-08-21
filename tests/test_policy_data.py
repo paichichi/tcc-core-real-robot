@@ -8,6 +8,7 @@ import torch
 
 from tcc_real_robot.policy_data import (
     build_episode_records,
+    load_cached_current_delta_split,
     load_cached_future_delta_split,
     load_cached_split,
 )
@@ -110,3 +111,25 @@ def test_cached_progress_resets_at_each_episode_boundary(tmp_path: Path) -> None
     loaded = load_cached_split(tmp_path, "train")
 
     assert loaded["progress"].flatten().tolist() == [0.0, 0.5, 1.0] * 2
+
+
+def test_current_delta_labels_use_matching_state_and_action(tmp_path: Path) -> None:
+    path = tmp_path / "train" / "task_0" / "episode_000000.pt"
+    path.parent.mkdir(parents=True)
+    state = torch.arange(21, dtype=torch.float32).reshape(3, 7)
+    action = state + torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 0.01])
+    torch.save(
+        {
+            "cam_main": torch.zeros((3, 2)),
+            "cam_wrist": torch.zeros((3, 2)),
+            "action": action,
+            "state": state,
+            "task_index": torch.zeros(3, dtype=torch.long),
+        },
+        path,
+    )
+
+    loaded = load_cached_current_delta_split(tmp_path, "train")
+
+    assert torch.allclose(loaded["action"], action - state)
+    assert torch.equal(loaded["state"], state)

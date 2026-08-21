@@ -14,8 +14,13 @@ import torch
 import yaml
 from torch import nn
 
-from tcc_real_robot.policy import ActionNormalizer, TCCMLPPolicy
+from tcc_real_robot.policy import (
+    ActionNormalizer,
+    TCCMLPGaussianMixturePolicy,
+    TCCMLPPolicy,
+)
 from tcc_real_robot.policy_data import (
+    load_cached_current_delta_split,
     load_cached_future_delta_split,
     load_cached_split,
 )
@@ -72,7 +77,18 @@ def evaluate_policy(
             batch["progress"].float() if model.progress_dim else None,
         )
         normalized_target = normalizer.normalize(batch["action"])
-        if loss_name == "mse":
+        if loss_name == "gmm_nll":
+            if not isinstance(model, TCCMLPGaussianMixturePolicy):
+                raise TypeError("gmm_nll requires a Gaussian-mixture policy")
+            loss = model.negative_log_likelihood(
+                normalized_target,
+                batch["cam_main"].float(),
+                batch["cam_wrist"].float(),
+                batch["task_index"],
+                proprioception,
+                batch["progress"].float() if model.progress_dim else None,
+            )
+        elif loss_name == "mse":
             loss = nn.functional.mse_loss(prediction, normalized_target)
         elif loss_name == "smooth_l1":
             loss = nn.functional.smooth_l1_loss(prediction, normalized_target)
@@ -269,6 +285,16 @@ def main() -> None:
         test = load_cached_future_delta_split(
             args.cache_root, "test", lookahead_frames
         )
+    elif action_representation == "current_delta":
+        if not uses_proprioception:
+            raise ValueError("current_delta training requires proprioception")
+        train = load_cached_current_delta_split(
+            args.cache_root,
+            "train",
+            episode_ids_by_task=selected_episode_ids,
+        )
+        validation = load_cached_current_delta_split(args.cache_root, "validation")
+        test = load_cached_current_delta_split(args.cache_root, "test")
     elif action_representation == "absolute":
         train = load_cached_split(
             args.cache_root,
@@ -312,7 +338,22 @@ def main() -> None:
     if "cam_wrist" in camera_names and train["cam_wrist"].shape[1] != feature_dim:
         raise ValueError("Camera feature dimensions differ")
 
-    model = TCCMLPPolicy(
+    action_distribution = str(
+        policy_config.get("action_distribution", "deterministic")
+    )
+    if action_distribution == "deterministic":
+        model_class = TCCMLPPolicy
+    elif action_distribution == "gaussian_mixture":
+        model_class = TCCMLPGaussianMixturePolicy
+    else:
+        raise ValueError(f"Unsupported action distribution: {action_distribution}")
+    model_kwargs: dict[str, object] = {}
+    if action_distribution == "gaussian_mixture":
+        model_kwargs = {
+            "num_modes": int(policy_config.get("num_modes", 5)),
+            "min_std": float(policy_config.get("min_std", 1e-4)),
+        }
+    model = model_class(
         feature_dim=feature_dim,
         num_tasks=int(policy_config["number_of_tasks"]),
         action_dim=int(policy_config["action_dim"]),
@@ -335,6 +376,8 @@ def main() -> None:
         camera_fusion=camera_fusion,
         camera_projection_dim=camera_projection_dim,
         camera_gate_hidden_dim=camera_gate_hidden_dim,
+        dropout=float(policy_config.get("dropout", 0.0)),
+        **model_kwargs,
     ).to(device)
     action_mean = train["action"].mean(dim=0)
     action_std = train["action"].std(dim=0)
@@ -350,7 +393,11 @@ def main() -> None:
         model.parameters(), lr=float(policy_config["learning_rate"])
     )
     loss_name = str(policy_config.get("loss", "smooth_l1"))
-    if loss_name == "mse":
+    if loss_name == "gmm_nll":
+        if not isinstance(model, TCCMLPGaussianMixturePolicy):
+            raise ValueError("gmm_nll requires action_distribution=gaussian_mixture")
+        loss_function = None
+    elif loss_name == "mse":
         loss_function: nn.Module = nn.MSELoss()
     elif loss_name == "smooth_l1":
         loss_function = nn.SmoothL1Loss()
@@ -374,14 +421,27 @@ def main() -> None:
             if state_normalizer is not None
             else None
         )
-        prediction = model(
-            batch["cam_main"].float(),
-            batch["cam_wrist"].float(),
-            batch["task_index"],
-            proprioception,
-            batch["progress"].float() if model.progress_dim else None,
-        )
-        loss = loss_function(prediction, normalizer.normalize(batch["action"]))
+        normalized_target = normalizer.normalize(batch["action"])
+        if isinstance(model, TCCMLPGaussianMixturePolicy):
+            loss = model.negative_log_likelihood(
+                normalized_target,
+                batch["cam_main"].float(),
+                batch["cam_wrist"].float(),
+                batch["task_index"],
+                proprioception,
+                batch["progress"].float() if model.progress_dim else None,
+            )
+        else:
+            if loss_function is None:
+                raise RuntimeError("Deterministic policy has no loss function")
+            prediction = model(
+                batch["cam_main"].float(),
+                batch["cam_wrist"].float(),
+                batch["task_index"],
+                proprioception,
+                batch["progress"].float() if model.progress_dim else None,
+            )
+            loss = loss_function(prediction, normalized_target)
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
         optimizer.step()
@@ -398,7 +458,7 @@ def main() -> None:
             )
             metric_name = (
                 "validation_delta_mae"
-                if action_representation == "future_delta"
+                if action_representation in {"future_delta", "current_delta"}
                 else "validation_action_mae"
             )
             row = {
@@ -483,7 +543,7 @@ def main() -> None:
     )
     test_metric_name = (
         "test_delta_mae_at_best"
-        if action_representation == "future_delta"
+        if action_representation in {"future_delta", "current_delta"}
         else "test_action_mae_at_best"
     )
     metrics = {

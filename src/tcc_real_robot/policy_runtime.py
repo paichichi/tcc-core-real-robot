@@ -11,7 +11,12 @@ import torch
 from torch import nn
 from torchvision.transforms import functional as vision_f
 
-from tcc_real_robot.policy import ActionNormalizer, TCCMLPPolicy
+from tcc_real_robot.policy import (
+    ActionNormalizer,
+    HRPSingleViewGaussianMixturePolicy,
+    TCCMLPGaussianMixturePolicy,
+    TCCMLPPolicy,
+)
 
 IMAGENET_MEAN = torch.tensor((0.485, 0.456, 0.406)).view(1, 3, 1, 1)
 IMAGENET_STD = torch.tensor((0.229, 0.224, 0.225)).view(1, 3, 1, 1)
@@ -24,11 +29,12 @@ _NORMALIZATION_CACHE: dict[
 class PolicyBundle:
     """A restored policy head and the action normalizer saved with it."""
 
-    model: TCCMLPPolicy
+    model: TCCMLPPolicy | HRPSingleViewGaussianMixturePolicy
     normalizer: ActionNormalizer
     state_normalizer: ActionNormalizer | None
     config: dict[str, Any]
     step: int
+    backbone_state: dict[str, torch.Tensor] | None = None
 
 
 def validate_policy_contract(
@@ -45,6 +51,13 @@ def validate_policy_contract(
         "proprioception",
         "proprioception_dim",
         "action_representation",
+        "action_frame",
+        "rotation_velocity",
+        "gripper_action",
+        "action_distribution",
+        "architecture",
+        "num_modes",
+        "dropout",
         "progress_conditioning",
         "progress_dim",
     )
@@ -174,10 +187,15 @@ def load_policy_bundle(
             f"Unsupported progress conditioning: {progress_conditioning}"
         )
     action_representation = policy_config.get("action_representation", "absolute")
-    if action_representation not in {"absolute", "future_delta"}:
+    if action_representation not in {
+        "absolute",
+        "future_delta",
+        "current_delta",
+        "cartesian_velocity",
+    }:
         raise ValueError(f"Unsupported action representation: {action_representation}")
-    if action_representation == "future_delta" and not uses_proprioception:
-        raise ValueError("future_delta checkpoints require proprioception")
+    if action_representation in {"future_delta", "current_delta"} and not uses_proprioception:
+        raise ValueError(f"{action_representation} checkpoints require proprioception")
     if action_representation == "future_delta":
         lookahead_frames = int(policy_config.get("lookahead_frames", 1))
         default_gain = 1.0 / lookahead_frames
@@ -194,21 +212,55 @@ def load_policy_bundle(
     progress_dim = 1 if progress_conditioning == "normalized_episode_time" else 0
     if int(policy_config.get("progress_dim", progress_dim)) != progress_dim:
         raise ValueError("Checkpoint progress_dim disagrees with progress_conditioning")
-    model = TCCMLPPolicy(
-        feature_dim=feature_dim,
-        num_tasks=int(policy_config["number_of_tasks"]),
-        action_dim=int(policy_config["action_dim"]),
-        hidden_dims=tuple(policy_config["hidden_dimensions"]),
-        proprio_dim=proprio_dim,
-        progress_dim=progress_dim,
-        input_batch_norm=bool(policy_config["input_batch_norm"]),
-        input_layer_norm=bool(policy_config.get("input_layer_norm", False)),
-        output_layer_scale=float(policy_config.get("output_layer_scale", 1.0)),
-        camera_names=camera_names,
-        camera_fusion=camera_fusion,
-        camera_projection_dim=camera_projection_dim,
-        camera_gate_hidden_dim=camera_gate_hidden_dim,
-    )
+    architecture = str(policy_config.get("architecture", "pooled_feature_mlp"))
+    if architecture == "hrp_state_token_gmm":
+        if camera_names != ("cam_main",) or progress_dim or not uses_proprioception:
+            raise ValueError("HRP state-token policy requires one camera and state")
+        model: TCCMLPPolicy | HRPSingleViewGaussianMixturePolicy = (
+            HRPSingleViewGaussianMixturePolicy(
+                feature_dim=feature_dim,
+                action_dim=int(policy_config["action_dim"]),
+                state_dim=proprio_dim,
+                hidden_dims=tuple(policy_config["hidden_dimensions"]),
+                num_modes=int(policy_config.get("num_modes", 5)),
+                dropout=float(policy_config.get("dropout", 0.2)),
+                min_std=float(policy_config.get("min_std", 1e-4)),
+            )
+        )
+    else:
+        action_distribution = str(
+            policy_config.get("action_distribution", "deterministic")
+        )
+        if action_distribution == "deterministic":
+            model_class = TCCMLPPolicy
+            model_kwargs: dict[str, object] = {}
+        elif action_distribution == "gaussian_mixture":
+            model_class = TCCMLPGaussianMixturePolicy
+            model_kwargs = {
+                "num_modes": int(policy_config.get("num_modes", 5)),
+                "min_std": float(policy_config.get("min_std", 1e-4)),
+            }
+        else:
+            raise ValueError(
+                f"Unsupported action distribution: {action_distribution}"
+            )
+        model = model_class(
+            feature_dim=feature_dim,
+            num_tasks=int(policy_config["number_of_tasks"]),
+            action_dim=int(policy_config["action_dim"]),
+            hidden_dims=tuple(policy_config["hidden_dimensions"]),
+            proprio_dim=proprio_dim,
+            progress_dim=progress_dim,
+            input_batch_norm=bool(policy_config["input_batch_norm"]),
+            input_layer_norm=bool(policy_config.get("input_layer_norm", False)),
+            output_layer_scale=float(policy_config.get("output_layer_scale", 1.0)),
+            camera_names=camera_names,
+            camera_fusion=camera_fusion,
+            camera_projection_dim=camera_projection_dim,
+            camera_gate_hidden_dim=camera_gate_hidden_dim,
+            dropout=float(policy_config.get("dropout", 0.0)),
+            **model_kwargs,
+        )
     model.load_state_dict(checkpoint["model"], strict=True)
     model.eval().to(device)
     normalizer = (
@@ -237,7 +289,21 @@ def load_policy_bundle(
         state_normalizer=state_normalizer,
         config=config,
         step=int(checkpoint.get("step", 0)),
+        backbone_state=checkpoint.get("backbone_model"),
     )
+
+
+def restore_policy_backbone(backbone: nn.Module, bundle: PolicyBundle) -> bool:
+    """Restore an end-to-end fine-tuned backbone embedded in a policy checkpoint."""
+    if bundle.backbone_state is None:
+        return False
+    missing, unexpected = backbone.load_state_dict(bundle.backbone_state, strict=True)
+    if missing or unexpected:
+        raise RuntimeError(
+            f"Fine-tuned backbone mismatch: missing={missing}, unexpected={unexpected}"
+        )
+    backbone.eval()
+    return True
 
 
 @torch.inference_mode()
@@ -308,18 +374,21 @@ def predict_action(
         )
         action = bundle.normalizer.denormalize(normalized_action)
         policy_config = bundle.config["policy"]
-        if policy_config.get("action_representation", "absolute") == "future_delta":
+        action_representation = policy_config.get(
+            "action_representation", "absolute"
+        )
+        if action_representation in {"future_delta", "current_delta"}:
             if proprioception is None:
-                raise RuntimeError("future_delta policy has no proprioception")
-            lookahead_frames = int(policy_config.get("lookahead_frames", 1))
-            gain = (
-                float(execution_delta_gain_override)
+                raise RuntimeError(f"{action_representation} policy has no proprioception")
+            if action_representation == "future_delta":
+                lookahead_frames = int(policy_config.get("lookahead_frames", 1))
+                default_gain = 1.0 / lookahead_frames
+            else:
+                default_gain = 1.0
+            gain = float(
+                execution_delta_gain_override
                 if execution_delta_gain_override is not None
-                else float(
-                    policy_config.get(
-                        "execution_delta_gain", 1.0 / lookahead_frames
-                    )
-                )
+                else policy_config.get("execution_delta_gain", default_gain)
             )
             if not 0.0 < gain <= 1.0:
                 raise ValueError("execution_delta_gain must be in (0, 1]")

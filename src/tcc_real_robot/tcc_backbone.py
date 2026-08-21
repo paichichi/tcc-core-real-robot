@@ -162,3 +162,29 @@ def load_frozen_tcc_backbone(
         "source_format": source_format,
     }
     return backbone, metadata
+
+
+def load_trainable_tcc_backbone(
+    checkpoint_path: str | Path,
+    tcc_source_root: str | Path,
+    device: torch.device,
+) -> tuple[nn.Module, dict[str, Any]]:
+    """Restore a backbone and enable full end-to-end downstream fine-tuning."""
+    backbone, metadata = load_frozen_tcc_backbone(
+        checkpoint_path,
+        tcc_source_root,
+        device,
+    )
+    for parameter in backbone.parameters():
+        parameter.requires_grad_(True)
+    backbone.train()
+    metadata = {
+        **metadata,
+        "fine_tuning": "full_end_to_end",
+        "trainable_parameters": sum(
+            parameter.numel()
+            for parameter in backbone.parameters()
+            if parameter.requires_grad
+        ),
+    }
+    return backbone, metadata

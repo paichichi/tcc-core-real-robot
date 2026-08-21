@@ -154,6 +154,14 @@ def apply_first_action_home_anchor(
     return raw_action.new_tensor(dataset_home_target), True
 
 
+def read_policy_state(home_session: Any, action_representation: str) -> list[float]:
+    """Read the checkpoint's declared state without leaking driver details upstream."""
+    if action_representation == "cartesian_velocity":
+        joints = home_session.read_positions()
+        return [*home_session.read_cartesian_positions(), joints[6]]
+    return home_session.read_positions()
+
+
 class SynchronizedCameras:
     """Acquire a close-in-time frame pair using OpenCV grab/retrieve."""
 
@@ -390,6 +398,7 @@ def main() -> None:
         load_policy_bundle,
         predict_action,
         resolve_device,
+        restore_policy_backbone,
         validate_policy_contract,
     )
     from tcc_real_robot.tcc_backbone import load_frozen_tcc_backbone
@@ -469,11 +478,18 @@ def main() -> None:
         expected_feature_dim=int(backbone_metadata["feature_dim"]),
         device=device,
     )
+    restore_policy_backbone(backbone, bundle)
     validate_policy_contract(config, bundle)
     checkpoint_policy_config = bundle.config["policy"]
     action_representation = checkpoint_policy_config.get(
         "action_representation", "absolute"
     )
+    if action_representation == "cartesian_velocity" and args.execute_clipped_step:
+        raise RuntimeError(
+            "HRP Cartesian-velocity checkpoints currently run shadow-only in "
+            "run_policy.py. The isolated TrossenHRPDriverAdapter is implemented, "
+            "but must not be routed through the legacy joint-position limiter."
+        )
     runtime_execution_delta_gain: float | None = None
     if action_representation == "future_delta":
         checkpoint_lookahead = int(checkpoint_policy_config["lookahead_frames"])
@@ -739,7 +755,7 @@ def main() -> None:
                 for _ in range(inference_warmup_steps):
                     warm_main, warm_wrist = cameras.read_rgb_pair()
                     warm_state = (
-                        home_session.read_positions()
+                        read_policy_state(home_session, action_representation)
                         if policy_uses_proprioception and home_session is not None
                         else None
                     )
@@ -792,7 +808,9 @@ def main() -> None:
                     state_started = time.monotonic()
                     policy_state = None
                     if policy_uses_proprioception and home_session is not None:
-                        policy_state = home_session.read_positions()
+                        policy_state = read_policy_state(
+                            home_session, action_representation
+                        )
                     state_latencies_ms.append(
                         (time.monotonic() - state_started) * 1000.0
                     )

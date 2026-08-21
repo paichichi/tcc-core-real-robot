@@ -284,3 +284,46 @@ def test_model_hub_is_pinned_to_an_immutable_revision() -> None:
     assert all(character in "0123456789abcdef" for character in hub["revision"])
     assert config["backbone"]["source"] == "huggingface"
     assert config["backbone"]["hub_name"] == "ours_rn50"
+
+
+def test_v7_hrp_gmm_delta_policy_configuration() -> None:
+    config = load_yaml(ROOT / "configs" / "experiment_v7_hrp_gmm_delta_60.yaml")
+    policy = config["policy"]
+
+    assert policy["reference"] == "hrp_data4robotics"
+    assert policy["cameras"] == ["cam_main", "cam_wrist"]
+    assert policy["camera_fusion"] == "raw_concat"
+    assert policy["proprioception"] is True
+    assert policy["progress_conditioning"] is None
+    assert policy["action_representation"] == "current_delta"
+    assert policy["action_distribution"] == "gaussian_mixture"
+    assert policy["num_modes"] == 5
+    assert policy["hidden_dimensions"] == [512, 512]
+    assert policy["dropout"] == 0.2
+    assert policy["loss"] == "gmm_nll"
+    assert policy["batch_size"] == 150
+    assert policy["learning_rate"] == 0.0001
+
+
+def test_v8_matches_hrp_release_single_view_defaults() -> None:
+    config = load_yaml(
+        ROOT / "configs" / "experiment_v8_hrp_official_single_view_60.yaml"
+    )
+    policy = config["policy"]
+
+    assert config["backbone"]["hub_name"] == "hrp_imagenet"
+    assert config["backbone"]["frozen"] is False
+    assert config["backbone"]["fine_tuning"] == "full_end_to_end"
+    assert config["dataset"]["tasks"] == ["pick_and_place_carrot_100"]
+    assert policy["architecture"] == "hrp_state_token_gmm"
+    assert policy["cameras"] == ["cam_main"]
+    assert policy["task_conditioning"] is None
+    assert policy["number_of_tasks"] == 1
+    assert policy["action_distribution"] == "gaussian_mixture"
+    assert policy["num_modes"] == 5
+    assert policy["hidden_dimensions"] == [512, 512]
+    assert policy["dropout"] == 0.2
+    assert policy["training_steps"] == 150000
+    assert policy["batch_size"] == 150
+    assert policy["learning_rate"] == 0.0003
+    assert policy["weight_decay"] == 0.0001

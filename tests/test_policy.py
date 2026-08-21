@@ -2,7 +2,12 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from tcc_real_robot.policy import ActionNormalizer, TCCMLPPolicy
+from tcc_real_robot.policy import (
+    ActionNormalizer,
+    HRPSingleViewGaussianMixturePolicy,
+    TCCMLPGaussianMixturePolicy,
+    TCCMLPPolicy,
+)
 
 
 def test_two_camera_policy_predicts_one_action() -> None:
@@ -161,3 +166,51 @@ def test_r3m_output_layer_uses_small_initialization() -> None:
     r3m_output = r3m_style.mlp[-1]
     assert torch.allclose(r3m_output.weight, baseline_output.weight * 0.01)
     assert torch.allclose(r3m_output.bias, baseline_output.bias * 0.01)
+
+
+def test_hrp_gmm_policy_predicts_deterministic_mode_mean_and_nll() -> None:
+    policy = TCCMLPGaussianMixturePolicy(
+        feature_dim=8,
+        num_tasks=4,
+        proprio_dim=7,
+        hidden_dims=(512, 512),
+        num_modes=5,
+        dropout=0.2,
+    ).eval()
+    main = torch.randn(3, 8)
+    wrist = torch.randn(3, 8)
+    task = torch.tensor([0, 1, 2])
+    state = torch.randn(3, 7)
+
+    first = policy(main, wrist, task, state)
+    second = policy(main, wrist, task, state)
+    loss = policy.negative_log_likelihood(
+        torch.randn(3, 7), main, wrist, task, state
+    )
+
+    assert first.shape == (3, 7)
+    assert torch.equal(first, second)
+    assert loss.ndim == 0
+    assert torch.isfinite(loss)
+
+
+def test_official_hrp_state_is_projected_as_a_second_token() -> None:
+    policy = HRPSingleViewGaussianMixturePolicy(
+        feature_dim=8,
+        hidden_dims=(512, 512),
+        num_modes=5,
+        dropout=0.2,
+    ).eval()
+    visual = torch.randn(4, 8)
+    state = torch.randn(4, 7)
+    task = torch.zeros(4, dtype=torch.long)
+
+    output = policy(visual, None, task, state)
+    loss = policy.negative_log_likelihood(
+        torch.randn(4, 7), visual, None, task, state
+    )
+
+    assert output.shape == (4, 7)
+    assert policy.mlp[0].in_features == 16
+    assert policy.state_token[1].out_features == 8
+    assert torch.isfinite(loss)
