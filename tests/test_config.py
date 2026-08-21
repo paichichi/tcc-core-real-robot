@@ -201,6 +201,17 @@ def test_r3m_single_view_proprio_policy_configuration() -> None:
     assert policy["input_batch_norm"] is True
     assert policy["loss"] == "mse"
     assert config["observations"]["cameras"] == ["cam_main", "cam_wrist"]
+    assert set(config["model_hub"]["supported_backbones"]) == {
+        "ours_rn50",
+        "ours_vit",
+        "hralign",
+        "r3m_unadapted",
+        "d4r_imagenet",
+        "hrp_imagenet",
+    }
+    assert config["model_hub"]["revision"] == (
+        "7b79ed9cefe5121ed510c74843f650310c564ada"
+    )
 
 
 def test_model_hub_is_pinned_to_an_immutable_revision() -> None:
