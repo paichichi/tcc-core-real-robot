@@ -36,10 +36,13 @@ class TCCMLPPolicy(nn.Module):
         action_dim: int = 7,
         hidden_dims: Sequence[int] = (256, 256),
         proprio_dim: int = 0,
+        progress_dim: int = 0,
         input_batch_norm: bool = True,
         input_layer_norm: bool = False,
     ) -> None:
         super().__init__()
+        if proprio_dim < 0 or progress_dim < 0:
+            raise ValueError("Conditioning dimensions cannot be negative")
         if feature_dim < 1 or num_tasks < 1 or action_dim < 1:
             raise ValueError("Feature, task, and action dimensions must be positive")
         if not hidden_dims or any(width < 1 for width in hidden_dims):
@@ -51,7 +54,8 @@ class TCCMLPPolicy(nn.Module):
         self.num_tasks = num_tasks
         self.action_dim = action_dim
         self.proprio_dim = proprio_dim
-        input_dim = 2 * feature_dim + num_tasks + proprio_dim
+        self.progress_dim = progress_dim
+        input_dim = 2 * feature_dim + num_tasks + proprio_dim + progress_dim
 
         layers: list[nn.Module] = []
         if input_batch_norm:
@@ -71,6 +75,7 @@ class TCCMLPPolicy(nn.Module):
         cam_wrist: torch.Tensor,
         task_index: torch.Tensor,
         proprioception: torch.Tensor | None = None,
+        progress: torch.Tensor | None = None,
     ) -> torch.Tensor:
         if cam_main.shape != cam_wrist.shape:
             raise ValueError("Camera feature tensors must have identical shapes")
@@ -89,4 +94,12 @@ class TCCMLPPolicy(nn.Module):
             inputs.append(proprioception)
         elif proprioception is not None:
             raise ValueError("This policy was configured without proprioception")
+        if self.progress_dim:
+            if progress is None:
+                raise ValueError("This policy requires episode progress")
+            if progress.shape != (cam_main.shape[0], self.progress_dim):
+                raise ValueError("Unexpected episode progress shape")
+            inputs.append(progress)
+        elif progress is not None:
+            raise ValueError("This policy was configured without episode progress")
         return self.mlp(torch.cat(inputs, dim=-1))

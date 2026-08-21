@@ -74,6 +74,15 @@ def cache_shard_path(cache_root: str | Path, record: EpisodeRecord) -> Path:
     )
 
 
+def _episode_progress(frames: int) -> torch.Tensor:
+    """Return normalized [0, 1] frame progress for one complete episode."""
+    if frames <= 0:
+        raise ValueError("Cached episode must contain at least one frame")
+    if frames == 1:
+        return torch.zeros((1, 1), dtype=torch.float32)
+    return torch.linspace(0.0, 1.0, frames).unsqueeze(1)
+
+
 def load_cached_split(
     cache_root: str | Path,
     split: str,
@@ -100,6 +109,10 @@ def load_cached_split(
         required = {"cam_main", "cam_wrist", "action", "state", "task_index"}
         if not isinstance(payload, dict) or not required.issubset(payload):
             raise ValueError(f"Malformed feature-cache shard: {path}")
+        lengths = {int(payload[key].shape[0]) for key in required}
+        if len(lengths) != 1:
+            raise ValueError(f"Cached episode tensors have different lengths: {path}")
+        payload["progress"] = _episode_progress(lengths.pop())
         rows.append(payload)
     return {
         "cam_main": torch.cat([row["cam_main"] for row in rows]),
@@ -107,6 +120,7 @@ def load_cached_split(
         "action": torch.cat([row["action"] for row in rows]).float(),
         "state": torch.cat([row["state"] for row in rows]).float(),
         "task_index": torch.cat([row["task_index"] for row in rows]).long(),
+        "progress": torch.cat([row["progress"] for row in rows]).float(),
     }
 
 
@@ -164,9 +178,17 @@ def load_cached_future_delta_split(
                     - payload["state"][current].float()
                 ),
                 "task_index": payload["task_index"][current].long(),
+                "progress": _episode_progress(frames)[current],
             }
         )
     return {
         key: torch.cat([row[key] for row in rows])
-        for key in ("cam_main", "cam_wrist", "state", "action", "task_index")
+        for key in (
+            "cam_main",
+            "cam_wrist",
+            "state",
+            "action",
+            "task_index",
+            "progress",
+        )
     }

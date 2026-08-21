@@ -37,7 +37,13 @@ def validate_policy_contract(
     """Reject a checkpoint trained for different policy input/output semantics."""
     expected = runtime_config["policy"]
     actual = bundle.config["policy"]
-    fields = ("proprioception", "proprioception_dim", "action_representation")
+    fields = (
+        "proprioception",
+        "proprioception_dim",
+        "action_representation",
+        "progress_conditioning",
+        "progress_dim",
+    )
     mismatches = {
         field: (expected.get(field), actual.get(field))
         for field in fields
@@ -131,6 +137,11 @@ def load_policy_bundle(
     if int(policy_config.get("action_chunk_size", -1)) != 1:
         raise ValueError("This runner requires a single-step policy checkpoint")
     uses_proprioception = policy_config.get("proprioception") is True
+    progress_conditioning = policy_config.get("progress_conditioning")
+    if progress_conditioning not in (None, "normalized_episode_time"):
+        raise ValueError(
+            f"Unsupported progress conditioning: {progress_conditioning}"
+        )
     action_representation = policy_config.get("action_representation", "absolute")
     if action_representation not in {"absolute", "future_delta"}:
         raise ValueError(f"Unsupported action representation: {action_representation}")
@@ -144,13 +155,21 @@ def load_policy_bundle(
         )
         if not 0.0 < execution_delta_gain <= 1.0:
             raise ValueError("execution_delta_gain must be in (0, 1]")
-    proprio_dim = int(policy_config.get("proprioception_dim", 7)) if uses_proprioception else 0
+    proprio_dim = (
+        int(policy_config.get("proprioception_dim", 7))
+        if uses_proprioception
+        else 0
+    )
+    progress_dim = 1 if progress_conditioning == "normalized_episode_time" else 0
+    if int(policy_config.get("progress_dim", progress_dim)) != progress_dim:
+        raise ValueError("Checkpoint progress_dim disagrees with progress_conditioning")
     model = TCCMLPPolicy(
         feature_dim=feature_dim,
         num_tasks=int(policy_config["number_of_tasks"]),
         action_dim=int(policy_config["action_dim"]),
         hidden_dims=tuple(policy_config["hidden_dimensions"]),
         proprio_dim=proprio_dim,
+        progress_dim=progress_dim,
         input_batch_norm=bool(policy_config["input_batch_norm"]),
         input_layer_norm=bool(policy_config.get("input_layer_norm", False)),
     )
@@ -196,6 +215,7 @@ def predict_action(
     device: torch.device,
     observation_state: list[float] | np.ndarray | torch.Tensor | None = None,
     execution_delta_gain_override: float | None = None,
+    episode_progress: float | torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Predict one denormalized 7-D absolute action on CPU."""
     number_of_tasks = int(bundle.config["policy"]["number_of_tasks"])
@@ -226,11 +246,28 @@ def predict_action(
             normalized_state = bundle.state_normalizer.normalize(proprioception)
         else:
             normalized_state = None
+        progress: torch.Tensor | None = None
+        if bundle.model.progress_dim:
+            if episode_progress is None:
+                raise ValueError("This policy checkpoint requires episode_progress")
+            progress = torch.as_tensor(
+                episode_progress, dtype=torch.float32, device=device
+            ).reshape(1, -1)
+            if progress.shape != (1, bundle.model.progress_dim):
+                raise ValueError(
+                    f"Expected episode progress shape [1, {bundle.model.progress_dim}]"
+                )
+            valid_progress = torch.isfinite(progress) & (progress >= 0.0) & (
+                progress <= 1.0
+            )
+            if not bool(valid_progress.all().item()):
+                raise ValueError("episode_progress must be finite and within [0, 1]")
         normalized_action = bundle.model(
             features[0:1],
             features[1:2],
             torch.tensor([task_index], device=device),
             normalized_state,
+            progress,
         )
         action = bundle.normalizer.denormalize(normalized_action)
         policy_config = bundle.config["policy"]

@@ -63,6 +63,7 @@ def test_load_cached_split_filters_episode_ids_per_task(tmp_path: Path) -> None:
     )
 
     assert loaded["action"].flatten().tolist() == [1.0, 10.0, 12.0]
+    assert loaded["progress"].flatten().tolist() == [0.0, 0.0, 0.0]
 
 
 def test_future_delta_labels_are_shifted_within_each_episode(tmp_path: Path) -> None:
@@ -87,3 +88,25 @@ def test_future_delta_labels_are_shifted_within_each_episode(tmp_path: Path) -> 
     assert torch.equal(loaded["state"], state[:2])
     assert torch.equal(loaded["action"], action[2:] - state[:2])
     assert loaded["cam_main"].shape == (2, 2)
+    assert loaded["progress"].flatten().tolist() == pytest.approx([0.0, 1.0 / 3.0])
+
+
+def test_cached_progress_resets_at_each_episode_boundary(tmp_path: Path) -> None:
+    for episode_index in range(2):
+        path = tmp_path / "train" / "task_0" / f"episode_{episode_index:06d}.pt"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        values = torch.zeros((3, 2))
+        torch.save(
+            {
+                "cam_main": values,
+                "cam_wrist": values,
+                "action": torch.zeros((3, 7)),
+                "state": torch.zeros((3, 7)),
+                "task_index": torch.zeros(3, dtype=torch.long),
+            },
+            path,
+        )
+
+    loaded = load_cached_split(tmp_path, "train")
+
+    assert loaded["progress"].flatten().tolist() == [0.0, 0.5, 1.0] * 2

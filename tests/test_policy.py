@@ -49,3 +49,22 @@ def test_future_delta_policy_accepts_normalized_state_and_layer_norm() -> None:
     )
 
     assert output.shape == (3, 7)
+
+
+def test_progress_conditioned_policy_accepts_normalized_episode_time() -> None:
+    policy = TCCMLPPolicy(
+        feature_dim=8,
+        num_tasks=4,
+        progress_dim=1,
+        input_batch_norm=False,
+        input_layer_norm=True,
+    )
+
+    output = policy(
+        torch.randn(3, 8),
+        torch.randn(3, 8),
+        torch.tensor([0, 1, 2]),
+        progress=torch.tensor([[0.0], [0.5], [1.0]]),
+    )
+
+    assert output.shape == (3, 7)

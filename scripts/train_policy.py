@@ -19,6 +19,7 @@ from tcc_real_robot.policy_data import (
     load_cached_future_delta_split,
     load_cached_split,
 )
+from tcc_real_robot.policy_runtime import resolve_device
 
 
 def parse_args() -> argparse.Namespace:
@@ -26,7 +27,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", type=Path, default=Path("configs/experiment.yaml"))
     parser.add_argument("--cache-root", type=Path, default=Path("runs/feature_cache"))
     parser.add_argument("--output-dir", type=Path, default=Path("runs/tcc_mlp_bc_v1"))
-    parser.add_argument("--device", default="cuda:0")
+    parser.add_argument("--device", default="auto")
     parser.add_argument("--steps", type=int)
     parser.add_argument("--log-every", type=int)
     parser.add_argument("--episodes-per-task", type=int)
@@ -67,6 +68,7 @@ def evaluate_policy(
             batch["cam_wrist"].float(),
             batch["task_index"],
             proprioception,
+            batch["progress"].float() if model.progress_dim else None,
         )
         normalized_target = normalizer.normalize(batch["action"])
         loss = nn.functional.smooth_l1_loss(prediction, normalized_target)
@@ -105,7 +107,8 @@ def main() -> None:
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    device = torch.device(args.device)
+    device = resolve_device(args.device)
+    print(f"Training device: {device}")
     if device.type == "cuda":
         torch.cuda.manual_seed_all(seed)
 
@@ -193,6 +196,12 @@ def main() -> None:
             if uses_proprioception
             else 0
         ),
+        progress_dim=(
+            1
+            if policy_config.get("progress_conditioning")
+            == "normalized_episode_time"
+            else 0
+        ),
         input_batch_norm=bool(policy_config["input_batch_norm"]),
         input_layer_norm=bool(policy_config["input_layer_norm"]),
     ).to(device)
@@ -235,6 +244,7 @@ def main() -> None:
             batch["cam_wrist"].float(),
             batch["task_index"],
             proprioception,
+            batch["progress"].float() if model.progress_dim else None,
         )
         loss = loss_function(prediction, normalizer.normalize(batch["action"]))
         optimizer.zero_grad(set_to_none=True)
