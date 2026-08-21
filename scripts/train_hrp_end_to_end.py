@@ -12,9 +12,9 @@ from pathlib import Path
 import torch
 import yaml
 from torch.utils.data import DataLoader
-from torchvision import transforms
 
 from tcc_real_robot.hrp_image_data import HRPImageDataset
+from tcc_real_robot.hrp_vision import build_hrp_image_transform
 from tcc_real_robot.model_assets import resolve_backbone_asset
 from tcc_real_robot.policy import (
     ActionNormalizer,
@@ -41,34 +41,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--iterations", type=int)
     parser.add_argument("--num-workers", type=int)
     return parser.parse_args()
-
-
-def image_transform(image_size: int, training: bool) -> transforms.Compose:
-    operations: list[torch.nn.Module] = [
-        transforms.ConvertImageDtype(torch.float32)
-    ]
-    if training:
-        kernel = int(0.05 * image_size)
-        kernel += 1 - kernel % 2
-        operations.extend(
-            [
-                transforms.RandomResizedCrop(
-                    image_size, scale=(0.9, 1.0), antialias=False
-                ),
-                transforms.GaussianBlur(kernel_size=kernel),
-            ]
-        )
-    else:
-        operations.append(
-            transforms.Resize((image_size, image_size), antialias=False)
-        )
-    operations.append(
-        transforms.Normalize(
-            mean=(0.485, 0.456, 0.406),
-            std=(0.229, 0.224, 0.225),
-        )
-    )
-    return transforms.Compose(operations)
 
 
 def save_checkpoint(
@@ -165,8 +137,14 @@ def main() -> None:
     backbone, metadata = load_trainable_tcc_backbone(
         asset, args.tcc_source_root, device
     )
-    train_transform = image_transform(int(metadata["image_size"]), True)
-    eval_transform = image_transform(int(metadata["image_size"]), False)
+    train_transform = build_hrp_image_transform(
+        int(metadata["image_size"]),
+        training=True,
+        augmentation=config.get("augmentation"),
+    )
+    eval_transform = build_hrp_image_transform(
+        int(metadata["image_size"]), training=False
+    )
     train_data = HRPImageDataset(
         args.image_buffer, "train", transform=train_transform
     )
