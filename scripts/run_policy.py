@@ -140,6 +140,20 @@ def _camera_source(value: str) -> int | str:
     return int(value) if value.isdecimal() else value
 
 
+def apply_first_action_home_anchor(
+    raw_action: Any,
+    step: int,
+    dataset_home_target: list[float],
+    enabled: bool,
+) -> tuple[Any, bool]:
+    """Replace only the first executed target with exact dataset home."""
+    if step != 0 or not enabled:
+        return raw_action, False
+    if len(dataset_home_target) != 7:
+        raise ValueError("Dataset home target must contain seven values")
+    return raw_action.new_tensor(dataset_home_target), True
+
+
 class SynchronizedCameras:
     """Acquire a close-in-time frame pair using OpenCV grab/retrieve."""
 
@@ -394,6 +408,18 @@ def main() -> None:
         raise ValueError(f"--max-steps must be within [1, {max_allowed_steps}]")
     fps = float(config["observations"]["fps"])
     evaluation_settings = robot_config["policy_evaluation"]
+    force_first_action_home = bool(
+        evaluation_settings.get("force_first_action_home", False)
+    )
+    dataset_home_target = [
+        *[
+            float(value)
+            for value in robot_config["robot"]["home_arm_positions_rad"]
+        ],
+        float(robot_config["robot"]["home_gripper_position_m"]),
+    ]
+    if len(dataset_home_target) != 7:
+        raise ValueError("Configured dataset home must contain seven targets")
     camera_capture_fps = float(evaluation_settings["camera_capture_fps"])
     if camera_capture_fps <= 0:
         raise ValueError("policy_evaluation.camera_capture_fps must be positive")
@@ -497,6 +523,7 @@ def main() -> None:
     home_reference: list[float] | None = None
     first_arm_delta: float | None = None
     first_gripper_delta: float | None = None
+    first_action_home_anchored = False
     bounded_steps: list[Any] = []
     final_verification: Any | None = None
     previous_policy_sample: tuple[float, tuple[float, ...]] | None = None
@@ -598,6 +625,10 @@ def main() -> None:
                 f"Policy maximum command lead: {clipped['max_command_lead']}\n"
             )
         report.write(f"Inference warmup steps: {inference_warmup_steps}\n")
+        report.write(
+            "First executed action home anchor: "
+            f"{'ENABLED' if force_first_action_home else 'DISABLED'}\n"
+        )
         report.write(f"Maximum steps: {max_steps}\n\n")
         if dataset_action_min is not None and dataset_action_max is not None:
             report.write(f"Dataset action minimum: {dataset_action_min}\n")
@@ -732,7 +763,7 @@ def main() -> None:
                         )
 
                         action_filter = ExponentialActionFilter(
-                            home_reference,
+                            dataset_home_target,
                             float(evaluation_settings["action_ema_alpha"]),
                         )
                 rollout_started = time.monotonic()
@@ -780,10 +811,18 @@ def main() -> None:
                             step / max(dataset_rollout_steps - 1, 1), 1.0
                         ),
                     )
-                    action = raw_action
+                    action, anchored = apply_first_action_home_anchor(
+                        raw_action,
+                        step,
+                        dataset_home_target,
+                        force_first_action_home and args.execute_clipped_step,
+                    )
+                    first_action_home_anchored = (
+                        first_action_home_anchored or anchored
+                    )
                     if action_filter is not None:
                         action = raw_action.new_tensor(
-                            action_filter.update(raw_action.tolist())
+                            action_filter.update(action.tolist())
                         )
                     policy_latencies_ms.append(
                         (time.monotonic() - policy_started) * 1000.0
@@ -995,10 +1034,29 @@ def main() -> None:
             }
             if args.execute_clipped_step:
                 clipped = evaluation_settings["clipped_rollout"]
+                first_command_home_error = (
+                    max(
+                        abs(float(actual) - target)
+                        for actual, target in zip(
+                            bounded_steps[0].commanded,
+                            dataset_home_target,
+                            strict=True,
+                        )
+                    )
+                    if bounded_steps
+                    else float("inf")
+                )
                 checks.update(
                     {
                         "clipped_rollout_completed": len(bounded_steps) == completed
                         and completed == max_steps,
+                        "first_command_home_anchored": (
+                            not force_first_action_home
+                            or (
+                                first_action_home_anchored
+                                and first_command_home_error <= 1e-7
+                            )
+                        ),
                         "commanded_arm_delta_safe": bool(bounded_steps)
                         and max(
                             item.max_commanded_arm_delta_rad for item in bounded_steps
@@ -1042,6 +1100,7 @@ def main() -> None:
                     "camera_pair_skew_safe",
                     "minimum_rate_met",
                     "clipped_rollout_completed",
+                    "first_command_home_anchored",
                     "commanded_arm_delta_safe",
                     "commanded_gripper_delta_safe",
                     "command_lead_safe",
@@ -1113,6 +1172,10 @@ def main() -> None:
                     f"{first_gripper_delta:.7f} m\n"
                 )
             if bounded_steps:
+                report.write(
+                    "First commanded action home error: "
+                    f"{first_command_home_error:.7f}\n"
+                )
                 report.write(
                     "Maximum commanded arm lead: "
                     f"{max(item.max_arm_command_lead_rad for item in bounded_steps):.7f} "

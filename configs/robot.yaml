@@ -74,8 +74,12 @@ policy_evaluation:
   max_home_gripper_error_m: 0.002
   inference_warmup_steps: 3
   minimum_observed_rate_hz: 18.0
+  # Keep the first executed command at the exact configured dataset home while
+  # still recording the first raw prediction. Subsequent steps remain visual
+  # closed-loop policy actions.
+  force_first_action_home: true
   # 0.25 at 20 Hz gives about a 0.17 s low-pass time constant. The filter is
-  # initialized from measured home and runs before the existing safety limiter.
+  # initialized from exact configured home and runs before the existing safety limiter.
   action_ema_alpha: 0.25
   clipped_rollout:
     # Permit an explicitly requested rollout beyond the 359-frame dataset

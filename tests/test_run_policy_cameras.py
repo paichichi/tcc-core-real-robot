@@ -38,6 +38,33 @@ def test_real_policy_preset_has_short_fixed_defaults(monkeypatch) -> None:
     assert args.emergency_stop_ready is True
 
 
+def test_first_executed_action_is_exact_dataset_home() -> None:
+    torch = pytest.importorskip("torch")
+    module = load_run_policy()
+    raw_action = torch.tensor([0.4, 0.3, 0.2, 0.1, -0.1, -0.2, 0.03])
+    home = [0.0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.0]
+
+    action, applied = module.apply_first_action_home_anchor(
+        raw_action, 0, home, True
+    )
+
+    assert applied is True
+    assert action.tolist() == pytest.approx(home)
+
+
+def test_home_anchor_preserves_later_live_policy_actions() -> None:
+    torch = pytest.importorskip("torch")
+    module = load_run_policy()
+    raw_action = torch.tensor([0.4, 0.3, 0.2, 0.1, -0.1, -0.2, 0.03])
+
+    action, applied = module.apply_first_action_home_anchor(
+        raw_action, 1, [0.0] * 7, True
+    )
+
+    assert applied is False
+    assert action is raw_action
+
+
 class FakeCapture:
     def __init__(self, grabs: list[bool]) -> None:
         self.grabs = iter(grabs)
