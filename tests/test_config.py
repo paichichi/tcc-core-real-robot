@@ -234,6 +234,9 @@ def test_v6_gated_multiview_proprio_policy_configuration() -> None:
         "ours_rn50",
         "ours_vit",
     ]
+    assert config["model_hub"]["revision"] == (
+        "94dc379f5ee00d7e410ac211396cd06d9e65953a"
+    )
 
 
 def test_model_hub_is_pinned_to_an_immutable_revision() -> None:
