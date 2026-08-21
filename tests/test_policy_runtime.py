@@ -5,8 +5,8 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from tcc_real_robot.policy import TCCMLPPolicy  # noqa: E402
-from tcc_real_robot.policy_runtime import (  # noqa: E402
+from tcc_real_robot.policy import TCCMLPPolicy
+from tcc_real_robot.policy_runtime import (
     load_policy_bundle,
     predict_action,
     preprocess_rgb_frames,
@@ -77,6 +77,39 @@ def future_delta_checkpoint_payload() -> dict:
             },
         },
         "step": 10_000,
+    }
+
+
+def progress_checkpoint_payload() -> dict:
+    model = TCCMLPPolicy(
+        feature_dim=3,
+        num_tasks=4,
+        progress_dim=1,
+        input_batch_norm=False,
+        input_layer_norm=True,
+    )
+    return {
+        "model": model.state_dict(),
+        "action_mean": torch.zeros(7),
+        "action_std": torch.ones(7),
+        "feature_dim": 3,
+        "config": {
+            "dataset": {"tasks": ["a", "b", "c", "d"]},
+            "policy": {
+                "number_of_tasks": 4,
+                "action_dim": 7,
+                "action_chunk_size": 1,
+                "action_representation": "absolute",
+                "hidden_dimensions": [256, 256],
+                "input_batch_norm": False,
+                "input_layer_norm": True,
+                "proprioception": False,
+                "proprioception_dim": 0,
+                "progress_conditioning": "normalized_episode_time",
+                "progress_dim": 1,
+            },
+        },
+        "step": 50_000,
     }
 
 
@@ -199,3 +232,48 @@ def test_future_delta_policy_requires_state(tmp_path: Path) -> None:
             image_size=32,
             device=torch.device("cpu"),
         )
+
+
+def test_progress_policy_requires_episode_progress(tmp_path: Path) -> None:
+    checkpoint = tmp_path / "progress.pt"
+    torch.save(progress_checkpoint_payload(), checkpoint)
+    bundle = load_policy_bundle(
+        checkpoint, expected_feature_dim=3, device=torch.device("cpu")
+    )
+    frame = np.zeros((48, 64, 3), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="requires episode_progress"):
+        predict_action(
+            MeanBackbone().eval(),
+            bundle,
+            frame,
+            frame,
+            task_index=0,
+            image_size=32,
+            device=torch.device("cpu"),
+        )
+
+
+def test_progress_policy_predicts_with_normalized_episode_time(
+    tmp_path: Path,
+) -> None:
+    checkpoint = tmp_path / "progress.pt"
+    torch.save(progress_checkpoint_payload(), checkpoint)
+    bundle = load_policy_bundle(
+        checkpoint, expected_feature_dim=3, device=torch.device("cpu")
+    )
+    frame = np.zeros((48, 64, 3), dtype=np.uint8)
+
+    action = predict_action(
+        MeanBackbone().eval(),
+        bundle,
+        frame,
+        frame,
+        task_index=0,
+        image_size=32,
+        device=torch.device("cpu"),
+        episode_progress=0.5,
+    )
+
+    assert action.shape == (7,)
+    assert torch.isfinite(action).all()

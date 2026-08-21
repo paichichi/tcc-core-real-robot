@@ -9,7 +9,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import cv2
-
 from inspect_camera_identity import (
     sysfs_usb_identity,
     udev_properties,

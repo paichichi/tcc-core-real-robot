@@ -1,6 +1,28 @@
 # Real-Robot Policy Training and Evaluation
 
-## 推荐的新实验：v3 proprioception + absolute action
+## 当前实验：R3M-style behavior cloning + Trossen driver
+
+本项目参考 Meta R3M 的公开 evaluation/behavior-cloning 工程设计训练 policy head，
+但不使用 R3M 的环境或机器人驱动。执行层仍是已经实机验证的 Trossen 官方 Python
+driver adapter：policy 只输出动作，driver adapter 负责 home、模式切换、20 Hz
+非阻塞 position command、tracking 检查和退出时回到 idle。
+
+当前配置是 `configs/experiment_r3m_mlp_60.yaml`：冻结双摄像头 backbone，拼接
+`cam_main`、`cam_wrist` 特征和 one-hot task ID；输入前使用 BatchNorm；MLP 为
+`[256, 256] + ReLU`；输出层初始参数缩放 `0.01`；Adam、MSE、学习率 `1e-3`、
+batch size `32`、训练 `50K` steps。它不输入 proprioception，也不输入 episode
+progress。
+
+两处是针对本数据集的必要适配：输出保持数据集/replay 已验证的 7-D absolute
+joint/gripper action，并使用 train split 的逐维 action 标准化，避免弧度关节和米制
+夹爪的量纲差异。每条 demo 是 20 Hz、359 帧，因此 rollout 上限保持 359；这不是
+action chunk，policy 每帧仍只预测一个动作。
+
+完整缓存、训练、shadow 和实机命令统一放在 `LINUX_COMMANDS.txt`。部署本地训练
+checkpoint 时必须显式传入 `--policy-checkpoint`。R3M 训练代码与 Trossen driver
+之间没有直接依赖，唯一接口是 denormalized 7-D action。
+
+## 上一版实验：v3 proprioception + absolute action
 
 v2 纯视觉单帧 MLP 在 20 Hz 实机 rollout 中约一半相邻输出发生方向反转，359
 帧中 308 帧触发 limiter，并在高处形成错误固定点。v3 使用

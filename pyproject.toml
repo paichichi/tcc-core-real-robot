@@ -47,3 +47,8 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 88
 target-version = "py310"
+
+[tool.ruff.lint]
+# These scripts are called with ``python scripts/...`` and can be transferred
+# through filesystems that do not preserve executable mode bits.
+ignore = ["EXE001"]

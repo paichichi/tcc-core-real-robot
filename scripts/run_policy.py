@@ -12,7 +12,12 @@ from typing import Any, Self
 import numpy as np
 
 from tcc_real_robot.config import load_yaml
-from tcc_real_robot.model_assets import resolve_model_assets
+from tcc_real_robot.model_assets import (
+    ResolvedModelAssets,
+    resolve_backbone_asset,
+    resolve_model_assets,
+    sha256_file,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -26,6 +31,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--robot-config", type=Path, default=Path("configs/robot.yaml"))
     parser.add_argument("--backbone", default="ours_rn50")
     parser.add_argument("--demonstrations", type=int, default=80)
+    parser.add_argument(
+        "--policy-checkpoint",
+        type=Path,
+        help="Use a locally trained policy head while retaining the pinned Hub backbone.",
+    )
     parser.add_argument(
         "--task",
         default="carrot",
@@ -395,13 +405,36 @@ def main() -> None:
     if inference_warmup_steps < 0:
         raise ValueError("--inference-warmup-steps must be non-negative")
     width, height = [int(value) for value in config["observations"]["resolution"]]
-    assets = resolve_model_assets(
-        config,
-        args.backbone,
-        args.demonstrations,
-        cache_dir=args.hub_cache_dir,
-        local_files_only=args.offline,
-    )
+    if args.policy_checkpoint is None:
+        assets = resolve_model_assets(
+            config,
+            args.backbone,
+            args.demonstrations,
+            cache_dir=args.hub_cache_dir,
+            local_files_only=args.offline,
+        )
+    else:
+        policy_path = args.policy_checkpoint.expanduser().resolve()
+        if not policy_path.is_file():
+            raise FileNotFoundError(policy_path)
+        backbone_path, backbone_sha256 = resolve_backbone_asset(
+            config,
+            args.backbone,
+            cache_dir=args.hub_cache_dir,
+            local_files_only=args.offline,
+        )
+        hub = config["model_hub"]
+        assets = ResolvedModelAssets(
+            repository=str(hub["repository"]),
+            revision=str(hub["revision"]),
+            backbone=args.backbone,
+            demonstrations=args.demonstrations,
+            backbone_path=backbone_path,
+            backbone_sha256=backbone_sha256,
+            policy_path=policy_path,
+            policy_sha256=sha256_file(policy_path),
+            metrics_path=policy_path.with_name("metrics.json"),
+        )
     backbone, backbone_metadata = load_frozen_tcc_backbone(
         assets.backbone_path, args.tcc_source_root, device
     )
@@ -505,6 +538,10 @@ def main() -> None:
         report.write(
             "Policy action representation: "
             f"{action_representation}\n"
+        )
+        report.write(
+            "Policy progress conditioning: "
+            f"{checkpoint_policy_config.get('progress_conditioning', 'DISABLED')}\n"
         )
         if runtime_execution_delta_gain is not None:
             report.write(

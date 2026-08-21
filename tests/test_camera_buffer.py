@@ -1,4 +1,5 @@
 import time
+from typing import ClassVar
 
 import numpy as np
 
@@ -6,8 +7,8 @@ from tcc_real_robot.camera_buffer import LatestFramePairBuffer
 
 
 class FakeCameraSource:
-    main_properties = {"name": "main"}
-    wrist_properties = {"name": "wrist"}
+    main_properties: ClassVar[dict[str, str]] = {"name": "main"}
+    wrist_properties: ClassVar[dict[str, str]] = {"name": "wrist"}
 
     def __init__(self) -> None:
         self.last_pair_skew_ms = None

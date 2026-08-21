@@ -39,6 +39,7 @@ class TCCMLPPolicy(nn.Module):
         progress_dim: int = 0,
         input_batch_norm: bool = True,
         input_layer_norm: bool = False,
+        output_layer_scale: float = 1.0,
     ) -> None:
         super().__init__()
         if proprio_dim < 0 or progress_dim < 0:
@@ -49,6 +50,8 @@ class TCCMLPPolicy(nn.Module):
             raise ValueError("At least one positive hidden dimension is required")
         if input_batch_norm and input_layer_norm:
             raise ValueError("Choose at most one input normalization layer")
+        if output_layer_scale <= 0:
+            raise ValueError("Output-layer scale must be positive")
 
         self.feature_dim = feature_dim
         self.num_tasks = num_tasks
@@ -66,7 +69,12 @@ class TCCMLPPolicy(nn.Module):
         for width in hidden_dims:
             layers.extend((nn.Linear(previous, width), nn.ReLU()))
             previous = width
-        layers.append(nn.Linear(previous, action_dim))
+        output_layer = nn.Linear(previous, action_dim)
+        with torch.no_grad():
+            output_layer.weight.mul_(output_layer_scale)
+            if output_layer.bias is not None:
+                output_layer.bias.mul_(output_layer_scale)
+        layers.append(output_layer)
         self.mlp = nn.Sequential(*layers)
 
     def forward(

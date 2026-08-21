@@ -9,7 +9,6 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
-
 PROPERTY_KEYS = (
     "ID_VENDOR_ID",
     "ID_MODEL_ID",

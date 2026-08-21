@@ -44,7 +44,7 @@ class FakeCapture:
         self.frame = np.arange(18, dtype=np.uint8).reshape(2, 3, 3)
         self.properties: dict[int, float] = {}
 
-    def isOpened(self) -> bool:  # noqa: N802 - mirror OpenCV API
+    def isOpened(self) -> bool:
         return True
 
     def set(self, key: int, value: float) -> bool:
@@ -76,11 +76,11 @@ class FakeCV2:
     def __init__(self, captures: list[FakeCapture]) -> None:
         self.captures = iter(captures)
 
-    def VideoCapture(self, *_: object) -> FakeCapture:  # noqa: N802
+    def VideoCapture(self, *_: object) -> FakeCapture:
         return next(self.captures)
 
     @staticmethod
-    def cvtColor(frame: np.ndarray, _: int) -> np.ndarray:  # noqa: N802
+    def cvtColor(frame: np.ndarray, _: int) -> np.ndarray:
         return frame
 
 

@@ -172,6 +172,7 @@ def load_policy_bundle(
         progress_dim=progress_dim,
         input_batch_norm=bool(policy_config["input_batch_norm"]),
         input_layer_norm=bool(policy_config.get("input_layer_norm", False)),
+        output_layer_scale=float(policy_config.get("output_layer_scale", 1.0)),
     )
     model.load_state_dict(checkpoint["model"], strict=True)
     model.eval().to(device)

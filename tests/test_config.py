@@ -146,6 +146,26 @@ def test_proprio_absolute_60_policy_configuration() -> None:
     }
 
 
+def test_r3m_reference_policy_configuration() -> None:
+    config = load_yaml(ROOT / "configs" / "experiment_r3m_mlp_60.yaml")
+    policy = config["policy"]
+    assert policy["implementation"] == "tcc_mlp_bc_v4_r3m_reference"
+    assert policy["proprioception"] is False
+    assert "progress_conditioning" not in policy
+    assert policy["action_representation"] == "absolute"
+    assert policy["hidden_dimensions"] == [256, 256]
+    assert policy["input_batch_norm"] is True
+    assert policy["input_layer_norm"] is False
+    assert policy["output_layer_scale"] == 0.01
+    assert policy["normalize_actions"] is True
+    assert policy["loss"] == "mse"
+    assert policy["optimizer"] == "adam"
+    assert policy["training_steps"] == 50_000
+    assert policy["batch_size"] == 32
+    assert policy["learning_rate"] == 0.001
+    assert config["evaluation"]["max_rollout_steps"] == 359
+
+
 def test_model_hub_is_pinned_to_an_immutable_revision() -> None:
     config = load_yaml(ROOT / "configs" / "experiment.yaml")
     hub = config["model_hub"]

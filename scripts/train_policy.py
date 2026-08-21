@@ -49,8 +49,9 @@ def evaluate_policy(
     data: dict[str, torch.Tensor],
     batch_size: int,
     device: torch.device,
+    loss_name: str,
 ) -> tuple[float, list[float]]:
-    """Evaluate normalized Huber loss and denormalized action-space MAE."""
+    """Evaluate normalized training loss and denormalized action-space MAE."""
     model.eval()
     loss_total = 0.0
     absolute_error = torch.zeros(7, device=device)
@@ -71,13 +72,81 @@ def evaluate_policy(
             batch["progress"].float() if model.progress_dim else None,
         )
         normalized_target = normalizer.normalize(batch["action"])
-        loss = nn.functional.smooth_l1_loss(prediction, normalized_target)
+        if loss_name == "mse":
+            loss = nn.functional.mse_loss(prediction, normalized_target)
+        elif loss_name == "smooth_l1":
+            loss = nn.functional.smooth_l1_loss(prediction, normalized_target)
+        else:
+            raise ValueError(f"Unsupported policy loss: {loss_name}")
         count = stop - start
         loss_total += float(loss) * count
         absolute_error += torch.sum(
             torch.abs(normalizer.denormalize(prediction) - batch["action"]), dim=0
         )
     return loss_total / examples, (absolute_error / examples).cpu().tolist()
+
+
+@torch.inference_mode()
+def evaluate_conditioning_sensitivity(
+    model: TCCMLPPolicy,
+    normalizer: ActionNormalizer,
+    state_normalizer: ActionNormalizer | None,
+    data: dict[str, torch.Tensor],
+    batch_size: int,
+    device: torch.device,
+) -> dict[str, list[float]]:
+    """Measure whether predictions react to vision instead of only to time."""
+    model.eval()
+    visual_delta = torch.zeros(model.action_dim, device=device)
+    progress_delta = torch.zeros(model.action_dim, device=device)
+    examples = int(data["action"].shape[0])
+    for start in range(0, examples, batch_size):
+        stop = min(start + batch_size, examples)
+        batch = {key: value[start:stop].to(device) for key, value in data.items()}
+        count = stop - start
+        shift = max(count // 2, 1)
+        proprioception = (
+            state_normalizer.normalize(batch["state"].float())
+            if state_normalizer is not None
+            else None
+        )
+        progress = batch["progress"].float() if model.progress_dim else None
+        prediction = model(
+            batch["cam_main"].float(),
+            batch["cam_wrist"].float(),
+            batch["task_index"],
+            proprioception,
+            progress,
+        )
+        shuffled_visual = model(
+            torch.roll(batch["cam_main"].float(), shifts=shift, dims=0),
+            torch.roll(batch["cam_wrist"].float(), shifts=shift, dims=0),
+            batch["task_index"],
+            proprioception,
+            progress,
+        )
+        shuffled_progress = model(
+            batch["cam_main"].float(),
+            batch["cam_wrist"].float(),
+            batch["task_index"],
+            proprioception,
+            torch.roll(progress, shifts=shift, dims=0) if progress is not None else None,
+        )
+        prediction = normalizer.denormalize(prediction)
+        visual_delta += torch.sum(
+            torch.abs(prediction - normalizer.denormalize(shuffled_visual)), dim=0
+        )
+        progress_delta += torch.sum(
+            torch.abs(prediction - normalizer.denormalize(shuffled_progress)), dim=0
+        )
+    return {
+        "validation_visual_shuffle_action_delta": (
+            visual_delta / examples
+        ).cpu().tolist(),
+        "validation_progress_shuffle_action_delta": (
+            progress_delta / examples
+        ).cpu().tolist(),
+    }
 
 
 def main() -> None:
@@ -152,6 +221,8 @@ def main() -> None:
             )
 
     policy_config = config["policy"]
+    if policy_config.get("normalize_actions", True) is not True:
+        raise ValueError("This trainer requires per-dimension action normalization")
     action_representation = policy_config.get("action_representation", "absolute")
     uses_proprioception = policy_config.get("proprioception") is True
     if action_representation == "future_delta":
@@ -204,6 +275,7 @@ def main() -> None:
         ),
         input_batch_norm=bool(policy_config["input_batch_norm"]),
         input_layer_norm=bool(policy_config["input_layer_norm"]),
+        output_layer_scale=float(policy_config.get("output_layer_scale", 1.0)),
     ).to(device)
     action_mean = train["action"].mean(dim=0)
     action_std = train["action"].std(dim=0)
@@ -218,9 +290,13 @@ def main() -> None:
     optimizer = torch.optim.Adam(
         model.parameters(), lr=float(policy_config["learning_rate"])
     )
-    if policy_config.get("loss") != "smooth_l1":
-        raise ValueError("The MLP policy trainer requires smooth_l1 loss")
-    loss_function = nn.SmoothL1Loss()
+    loss_name = str(policy_config.get("loss", "smooth_l1"))
+    if loss_name == "mse":
+        loss_function: nn.Module = nn.MSELoss()
+    elif loss_name == "smooth_l1":
+        loss_function = nn.SmoothL1Loss()
+    else:
+        raise ValueError(f"Unsupported policy loss: {loss_name}")
     steps = args.steps or int(policy_config["training_steps"])
     log_every = args.log_every or int(policy_config["log_every"])
     batch_size = int(policy_config["batch_size"])
@@ -259,6 +335,7 @@ def main() -> None:
                 validation,
                 batch_size * 4,
                 device,
+                loss_name,
             )
             metric_name = (
                 "validation_delta_mae"
@@ -267,8 +344,8 @@ def main() -> None:
             )
             row = {
                 "step": step,
-                "train_normalized_smooth_l1": float(loss.detach()),
-                "validation_normalized_smooth_l1": validation_loss,
+                f"train_normalized_{loss_name}": float(loss.detach()),
+                f"validation_normalized_{loss_name}": validation_loss,
                 metric_name: validation_mae,
             }
             history.append(row)
@@ -298,7 +375,8 @@ def main() -> None:
             "config": config,
             "step": checkpoint_step,
             "best_validation_step": best_step,
-            "best_validation_normalized_smooth_l1": best_validation_loss,
+            "best_validation_normalized_loss": best_validation_loss,
+            "loss": loss_name,
             "history": history,
             "actuation_enabled": False,
         }
@@ -312,7 +390,22 @@ def main() -> None:
     final_model_state = copy.deepcopy(model.state_dict())
     model.load_state_dict(best_model_state)
     test_loss, test_mae = evaluate_policy(
-        model, normalizer, state_normalizer, test, batch_size * 4, device
+        model,
+        normalizer,
+        state_normalizer,
+        test,
+        batch_size * 4,
+        device,
+        loss_name,
+    )
+
+    conditioning_sensitivity = evaluate_conditioning_sensitivity(
+        model,
+        normalizer,
+        state_normalizer,
+        validation,
+        batch_size * 4,
+        device,
     )
     model.load_state_dict(final_model_state)
 
@@ -337,9 +430,11 @@ def main() -> None:
     metrics = {
         "history": history,
         "best_validation_step": best_step,
-        "best_validation_normalized_smooth_l1": best_validation_loss,
-        "test_normalized_smooth_l1_at_best": test_loss,
+        "loss": loss_name,
+        f"best_validation_normalized_{loss_name}": best_validation_loss,
+        f"test_normalized_{loss_name}_at_best": test_loss,
         test_metric_name: test_mae,
+        **conditioning_sensitivity,
     }
     (output_dir / "metrics.json").write_text(json.dumps(metrics, indent=2) + "\n")
 

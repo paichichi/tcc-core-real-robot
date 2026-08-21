@@ -11,21 +11,20 @@ from pathlib import Path
 import cv2
 import numpy as np
 import torch
+from run_policy import SynchronizedCameras, resolve_task
 from torch.nn import functional as torch_f
 
 from tcc_real_robot.config import load_yaml
 from tcc_real_robot.model_assets import resolve_model_assets
 from tcc_real_robot.policy_data import build_episode_records
+from tcc_real_robot.policy_home import PolicyHomeSession
 from tcc_real_robot.policy_runtime import (
     load_policy_bundle,
     predict_action,
     preprocess_rgb_frames,
     resolve_device,
 )
-from tcc_real_robot.policy_home import PolicyHomeSession
 from tcc_real_robot.tcc_backbone import load_frozen_tcc_backbone
-
-from run_policy import SynchronizedCameras, resolve_task
 
 
 def parse_args() -> argparse.Namespace:
@@ -283,6 +282,7 @@ def main() -> None:
             image_size,
             device,
             observation_state=home,
+            episode_progress=0.0,
         )
         .numpy()
         .astype(np.float64)
@@ -301,6 +301,7 @@ def main() -> None:
             image_size,
             device,
             observation_state=home,
+            episode_progress=0.0,
         )
         if device.type == "cuda":
             torch.cuda.synchronize(device)
@@ -315,6 +316,7 @@ def main() -> None:
             image_size,
             device,
             observation_state=home,
+            episode_progress=0.0,
         )
         .numpy()
         .astype(np.float64)
@@ -395,6 +397,7 @@ def main() -> None:
             image_size,
             device,
             observation_state=nearest_normal["state"],
+            episode_progress=0.0,
         )
         .numpy()
         .astype(np.float64)
@@ -411,6 +414,7 @@ def main() -> None:
             image_size,
             device,
             observation_state=home,
+            episode_progress=0.0,
         )
         .numpy()
         .astype(np.float64)
@@ -425,6 +429,7 @@ def main() -> None:
             image_size,
             device,
             observation_state=home,
+            episode_progress=0.0,
         )
         .numpy()
         .astype(np.float64)
@@ -439,6 +444,7 @@ def main() -> None:
             image_size,
             device,
             observation_state=home,
+            episode_progress=0.0,
         )
         .numpy()
         .astype(np.float64)
@@ -453,6 +459,7 @@ def main() -> None:
             image_size,
             device,
             observation_state=home,
+            episode_progress=0.0,
         )
         .numpy()
         .astype(np.float64)
@@ -467,6 +474,7 @@ def main() -> None:
             image_size,
             device,
             observation_state=home,
+            episode_progress=0.0,
         )
         .numpy()
         .astype(np.float64)
