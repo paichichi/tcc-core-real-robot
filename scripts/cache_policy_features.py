@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cache frozen TCC features for both cameras. This script never actuates a robot."""
+"""Cache the frozen TCC features required by a policy configuration."""
 
 from __future__ import annotations
 
@@ -144,6 +144,11 @@ def main() -> None:
             int(split["test_episodes_per_task"]),
         ),
     )
+    policy_cameras = tuple(
+        config["policy"].get("cameras", ("cam_main", "cam_wrist"))
+    )
+    if policy_cameras not in (("cam_main",), ("cam_main", "cam_wrist")):
+        raise ValueError("Unsupported policy camera inputs")
     if args.limit_episodes is not None:
         records = records[: args.limit_episodes]
     if args.limit_episodes_per_split is not None:
@@ -175,13 +180,17 @@ def main() -> None:
             args.batch_size,
             device,
         )
-        wrist_features, wrist_count = encode_camera(
-            backbone,
-            record.video_path("cam_wrist"),
-            metadata["image_size"],
-            args.batch_size,
-            device,
-        )
+        if "cam_wrist" in policy_cameras:
+            wrist_features, wrist_count = encode_camera(
+                backbone,
+                record.video_path("cam_wrist"),
+                metadata["image_size"],
+                args.batch_size,
+                device,
+            )
+        else:
+            wrist_features = torch.empty((main_count, 0), dtype=main_features.dtype)
+            wrist_count = main_count
         lengths = {main_count, wrist_count, action.shape[0], state.shape[0]}
         if len(lengths) != 1:
             raise RuntimeError(f"Unsynchronized episode {record}: lengths={lengths}")
@@ -212,6 +221,7 @@ def main() -> None:
             for record in records
         ],
         "split": dict(split),
+        "policy_cameras": list(policy_cameras),
         "policy_actuation": False,
     }
     (cache_root / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")

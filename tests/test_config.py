@@ -167,6 +167,22 @@ def test_r3m_reference_policy_configuration() -> None:
     assert config["evaluation"]["max_rollout_steps"] == 359
 
 
+def test_r3m_single_view_proprio_policy_configuration() -> None:
+    config = load_yaml(
+        ROOT / "configs" / "experiment_r3m_single_view_proprio_60.yaml"
+    )
+    policy = config["policy"]
+    assert policy["implementation"] == "tcc_mlp_bc_v5_r3m_single_view_proprio"
+    assert policy["cameras"] == ["cam_main"]
+    assert policy["proprioception"] is True
+    assert policy["proprioception_dim"] == 7
+    assert policy["action_representation"] == "absolute"
+    assert policy["hidden_dimensions"] == [256, 256]
+    assert policy["input_batch_norm"] is True
+    assert policy["loss"] == "mse"
+    assert config["observations"]["cameras"] == ["cam_main", "cam_wrist"]
+
+
 def test_model_hub_is_pinned_to_an_immutable_revision() -> None:
     config = load_yaml(ROOT / "configs" / "experiment.yaml")
     hub = config["model_hub"]

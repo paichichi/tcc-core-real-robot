@@ -27,7 +27,7 @@ class ActionNormalizer(nn.Module):
 
 
 class TCCMLPPolicy(nn.Module):
-    """Predict one action from two frozen features, task ID, and optional state."""
+    """Predict one action from configured frozen features and optional state."""
 
     def __init__(
         self,
@@ -40,6 +40,7 @@ class TCCMLPPolicy(nn.Module):
         input_batch_norm: bool = True,
         input_layer_norm: bool = False,
         output_layer_scale: float = 1.0,
+        camera_names: Sequence[str] = ("cam_main", "cam_wrist"),
     ) -> None:
         super().__init__()
         if proprio_dim < 0 or progress_dim < 0:
@@ -52,13 +53,24 @@ class TCCMLPPolicy(nn.Module):
             raise ValueError("Choose at most one input normalization layer")
         if output_layer_scale <= 0:
             raise ValueError("Output-layer scale must be positive")
+        camera_names = tuple(camera_names)
+        if camera_names not in (("cam_main",), ("cam_main", "cam_wrist")):
+            raise ValueError(
+                "Camera inputs must be cam_main alone or cam_main plus cam_wrist"
+            )
 
         self.feature_dim = feature_dim
         self.num_tasks = num_tasks
         self.action_dim = action_dim
         self.proprio_dim = proprio_dim
         self.progress_dim = progress_dim
-        input_dim = 2 * feature_dim + num_tasks + proprio_dim + progress_dim
+        self.camera_names = camera_names
+        input_dim = (
+            len(camera_names) * feature_dim
+            + num_tasks
+            + proprio_dim
+            + progress_dim
+        )
 
         layers: list[nn.Module] = []
         if input_batch_norm:
@@ -80,20 +92,23 @@ class TCCMLPPolicy(nn.Module):
     def forward(
         self,
         cam_main: torch.Tensor,
-        cam_wrist: torch.Tensor,
+        cam_wrist: torch.Tensor | None,
         task_index: torch.Tensor,
         proprioception: torch.Tensor | None = None,
         progress: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        if cam_main.shape != cam_wrist.shape:
-            raise ValueError("Camera feature tensors must have identical shapes")
         if cam_main.ndim != 2 or cam_main.shape[1] != self.feature_dim:
             raise ValueError(
                 f"Expected camera features [B, {self.feature_dim}], "
                 f"got {tuple(cam_main.shape)}"
             )
         task = F.one_hot(task_index.long(), self.num_tasks).to(cam_main.dtype)
-        inputs = [cam_main, cam_wrist, task]
+        inputs = [cam_main]
+        if "cam_wrist" in self.camera_names:
+            if cam_wrist is None or cam_main.shape != cam_wrist.shape:
+                raise ValueError("Camera feature tensors must have identical shapes")
+            inputs.append(cam_wrist)
+        inputs.append(task)
         if self.proprio_dim:
             if proprioception is None:
                 raise ValueError("This policy requires proprioception")

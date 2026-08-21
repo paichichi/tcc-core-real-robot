@@ -38,6 +38,7 @@ def validate_policy_contract(
     expected = runtime_config["policy"]
     actual = bundle.config["policy"]
     fields = (
+        "cameras",
         "proprioception",
         "proprioception_dim",
         "action_representation",
@@ -173,6 +174,9 @@ def load_policy_bundle(
         input_batch_norm=bool(policy_config["input_batch_norm"]),
         input_layer_norm=bool(policy_config.get("input_layer_norm", False)),
         output_layer_scale=float(policy_config.get("output_layer_scale", 1.0)),
+        camera_names=tuple(
+            policy_config.get("cameras", ("cam_main", "cam_wrist"))
+        ),
     )
     model.load_state_dict(checkpoint["model"], strict=True)
     model.eval().to(device)
@@ -222,9 +226,10 @@ def predict_action(
     number_of_tasks = int(bundle.config["policy"]["number_of_tasks"])
     if not 0 <= task_index < number_of_tasks:
         raise ValueError(f"Task index {task_index} is outside [0, {number_of_tasks})")
-    images = preprocess_rgb_frames(
-        [cam_main_rgb, cam_wrist_rgb], image_size, device=device
-    )
+    frames = [cam_main_rgb]
+    if "cam_wrist" in bundle.model.camera_names:
+        frames.append(cam_wrist_rgb)
+    images = preprocess_rgb_frames(frames, image_size, device=device)
     with torch.autocast(
         device_type=device.type,
         dtype=torch.bfloat16,
@@ -265,7 +270,7 @@ def predict_action(
                 raise ValueError("episode_progress must be finite and within [0, 1]")
         normalized_action = bundle.model(
             features[0:1],
-            features[1:2],
+            features[1:2] if "cam_wrist" in bundle.model.camera_names else None,
             torch.tensor([task_index], device=device),
             normalized_state,
             progress,

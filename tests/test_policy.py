@@ -15,6 +15,24 @@ def test_two_camera_policy_predicts_one_action() -> None:
     assert output.shape == (5, 7)
 
 
+def test_r3m_single_camera_policy_ignores_wrist_feature() -> None:
+    policy = TCCMLPPolicy(
+        feature_dim=8,
+        num_tasks=4,
+        proprio_dim=7,
+        camera_names=("cam_main",),
+    ).eval()
+    main = torch.randn(5, 8)
+    task = torch.tensor([0, 1, 2, 3, 0])
+    state = torch.randn(5, 7)
+
+    first = policy(main, torch.randn(5, 8), task, state)
+    second = policy(main, torch.randn(5, 8), task, state)
+
+    assert first.shape == (5, 7)
+    assert torch.allclose(first, second)
+
+
 def test_no_state_policy_rejects_proprioception() -> None:
     policy = TCCMLPPolicy(feature_dim=8, num_tasks=4, proprio_dim=0)
     with pytest.raises(ValueError, match="without proprioception"):

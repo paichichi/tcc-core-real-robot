@@ -254,7 +254,10 @@ def main() -> None:
             f"Unsupported action_representation: {action_representation}"
         )
     feature_dim = int(train["cam_main"].shape[1])
-    if train["cam_wrist"].shape[1] != feature_dim:
+    camera_names = tuple(
+        policy_config.get("cameras", ("cam_main", "cam_wrist"))
+    )
+    if "cam_wrist" in camera_names and train["cam_wrist"].shape[1] != feature_dim:
         raise ValueError("Camera feature dimensions differ")
 
     model = TCCMLPPolicy(
@@ -276,6 +279,7 @@ def main() -> None:
         input_batch_norm=bool(policy_config["input_batch_norm"]),
         input_layer_norm=bool(policy_config["input_layer_norm"]),
         output_layer_scale=float(policy_config.get("output_layer_scale", 1.0)),
+        camera_names=camera_names,
     ).to(device)
     action_mean = train["action"].mean(dim=0)
     action_std = train["action"].std(dim=0)
