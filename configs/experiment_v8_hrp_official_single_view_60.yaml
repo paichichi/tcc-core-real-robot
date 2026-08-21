@@ -79,9 +79,18 @@ policy:
   evaluation_samples: 500
 
 augmentation:
-  name: medium
+  name: real_robot_domain_robust
   random_resized_crop_scale: [0.9, 1.0]
+  # Preserve the 4:3 camera geometry while allowing mild crop/translation.
+  random_resized_crop_ratio: [1.20, 1.333333]
+  color_jitter:
+    brightness: 0.15
+    contrast: 0.15
+    saturation: 0.12
+    hue: 0.03
+  color_jitter_probability: 0.8
   gaussian_blur: true
+  gaussian_blur_probability: 0.2
   imagenet_normalization: true
 
 evaluation:
