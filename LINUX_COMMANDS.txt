@@ -1,4 +1,6 @@
 python scripts/cache_hrp_images.py --config configs/experiment_v8_hrp_official_single_view_60.yaml --dataset-root datasets/pick_and_place_4_object_diverse --output runs/hrp_image_buffer_carrot_60_cartesian_velocity.sqlite3 --overwrite
 
 
-python scripts/train_hrp_end_to_end.py --config configs/experiment_v8_hrp_official_single_view_60.yaml --image-buffer runs/hrp_image_buffer_carrot_60_cartesian_velocity.sqlite3 --backbone hrp_imagenet --tcc-source-root /home/robotarm/TCC-core --output-dir runs/tcc_mlp_bc_v8_hrp_cartesian_velocity/hrp_imagenet/60 --device auto
+for backbone in ours_rn50 ours_vit r3m_unadapted d4r_imagenet; do
+  python scripts/train_hrp_end_to_end.py --config configs/experiment_v8_hrp_official_single_view_60.yaml --image-buffer runs/hrp_image_buffer_carrot_60_cartesian_velocity.sqlite3 --backbone "$backbone" --tcc-source-root /home/robotarm/TCC-core --output-dir "runs/tcc_mlp_bc_v8_hrp_cartesian_velocity/$backbone/60" --device auto
+done

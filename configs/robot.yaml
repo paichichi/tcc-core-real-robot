@@ -31,7 +31,15 @@ robot:
 
 action_contract:
   dimensions: 7
-  semantics: UNVERIFIED
+  semantics: [vx, vy, vz, wx, wy, wz, gripper_velocity]
+  linear_units: m_s
+  angular_units: rad_s
+  gripper_units: driver_position_unit_s
+  frame: robot_base
+  dataset_pose: intrinsic_xyz_roll_pitch_yaw
+  driver_pose: angle_axis
+  mathematical_conversion: verified_on_35800_transitions
+  physical_actuation: UNVERIFIED
   enabled: false
 
 cameras:

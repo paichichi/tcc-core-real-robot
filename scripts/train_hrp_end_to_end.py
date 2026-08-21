@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import shutil
 from itertools import chain
 from pathlib import Path
 
+import numpy as np
 import torch
 import yaml
 from torch.utils.data import DataLoader
@@ -53,14 +55,14 @@ def image_transform(image_size: int, training: bool) -> transforms.Compose:
         operations.extend(
             [
                 transforms.RandomResizedCrop(
-                    image_size, scale=(0.9, 1.0), antialias=False
+                    image_size, scale=(0.9, 1.0), antialias=True
                 ),
                 transforms.GaussianBlur(kernel_size=kernel),
             ]
         )
     else:
         operations.append(
-            transforms.Resize((image_size, image_size), antialias=False)
+            transforms.Resize((image_size, image_size), antialias=True)
         )
     operations.append(
         transforms.Normalize(
@@ -152,6 +154,12 @@ def evaluate(
 def main() -> None:
     args = parse_args()
     config = yaml.safe_load(args.config.read_text())
+    seed = int(config["seed"])
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
     policy_config = config["policy"]
     if policy_config["cameras"] != ["cam_main"]:
         raise ValueError("Official HRP reproduction requires cam_main only")
@@ -204,6 +212,7 @@ def main() -> None:
         pin_memory=device.type == "cuda",
         persistent_workers=workers > 0,
         drop_last=True,
+        generator=torch.Generator().manual_seed(seed),
     )
     validation_loader = DataLoader(
         validation_data, batch_size=batch_size, shuffle=False, num_workers=workers
@@ -251,7 +260,11 @@ def main() -> None:
         loss.backward()
         optimizer.step()
         if step == 1 or step % 100 == 0:
-            print(json.dumps({"step": step, "train_gmm_nll": float(loss)}))
+            print(
+                json.dumps(
+                    {"step": step, "train_gmm_nll": float(loss.detach())}
+                )
+            )
         if step % eval_every == 0 or step == iterations:
             validation_loss, validation_mae = evaluate(
                 backbone,
@@ -282,15 +295,6 @@ def main() -> None:
                     step=step,
                     validation_loss=validation_loss,
                 )
-    test_loss, test_mae = evaluate(
-        backbone,
-        model,
-        test_loader,
-        state_normalizer,
-        action_normalizer,
-        device,
-        eval_samples,
-    )
     save_checkpoint(
         output_dir / "checkpoint_last.pt",
         backbone=backbone,
@@ -301,6 +305,20 @@ def main() -> None:
         action_normalizer=action_normalizer,
         step=iterations,
         validation_loss=best_loss,
+    )
+    best_checkpoint = torch.load(
+        output_dir / "checkpoint_best.pt", map_location=device, weights_only=False
+    )
+    backbone.load_state_dict(best_checkpoint["backbone_model"])
+    model.load_state_dict(best_checkpoint["model"])
+    test_loss, test_mae = evaluate(
+        backbone,
+        model,
+        test_loader,
+        state_normalizer,
+        action_normalizer,
+        device,
+        eval_samples,
     )
     shutil.copyfile(
         output_dir / "checkpoint_best.pt",

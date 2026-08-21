@@ -311,7 +311,12 @@ def test_v8_matches_hrp_release_single_view_defaults() -> None:
     )
     policy = config["policy"]
 
-    assert config["backbone"]["hub_name"] == "hrp_imagenet"
+    assert config["model_hub"]["supported_backbones"] == [
+        "ours_rn50",
+        "ours_vit",
+        "r3m_unadapted",
+        "d4r_imagenet",
+    ]
     assert config["backbone"]["frozen"] is False
     assert config["backbone"]["fine_tuning"] == "full_end_to_end"
     assert config["dataset"]["tasks"] == ["pick_and_place_carrot_100"]
@@ -319,6 +324,10 @@ def test_v8_matches_hrp_release_single_view_defaults() -> None:
     assert policy["cameras"] == ["cam_main"]
     assert policy["task_conditioning"] is None
     assert policy["number_of_tasks"] == 1
+    assert policy["dataset_pose_representation"] == "intrinsic_xyz_roll_pitch_yaw"
+    assert policy["driver_pose_representation"] == "angle_axis"
+    assert policy["action_frame"] == "robot_base"
+    assert policy["rotation_velocity"] == "angle_axis_spatial"
     assert policy["action_distribution"] == "gaussian_mixture"
     assert policy["num_modes"] == 5
     assert policy["hidden_dimensions"] == [512, 512]

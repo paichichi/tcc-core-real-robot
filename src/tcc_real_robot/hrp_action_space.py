@@ -31,6 +31,31 @@ def rotation_vector_to_matrix(rotation_vector: np.ndarray) -> np.ndarray:
     return np.eye(3) + sin(angle) * skew + (1.0 - cos(angle)) * (skew @ skew)
 
 
+def euler_xyz_to_matrix(euler_xyz: np.ndarray) -> np.ndarray:
+    """Convert dataset roll/pitch/yaw to a rotation matrix.
+
+    The LeRobot dataset explicitly records the last three Cartesian fields as
+    roll, pitch, and yaw.  They are intrinsic XYZ angles, equivalently
+    ``Rz(yaw) @ Ry(pitch) @ Rx(roll)``.  They must not be passed to the
+    Trossen angle-axis interface as though they were a rotation vector.
+    """
+    angles = np.asarray(euler_xyz, dtype=np.float64)
+    if angles.shape != (3,) or not np.isfinite(angles).all():
+        raise ValueError("euler_xyz must contain three finite values")
+    roll, pitch, yaw = angles
+    cr, sr = cos(roll), sin(roll)
+    cp, sp = cos(pitch), sin(pitch)
+    cy, sy = cos(yaw), sin(yaw)
+    return np.array(
+        [
+            [cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
+            [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
+            [-sp, cp * sr, cp * cr],
+        ],
+        dtype=np.float64,
+    )
+
+
 def matrix_to_rotation_vector(matrix: np.ndarray) -> np.ndarray:
     """Convert a 3x3 rotation matrix to its principal angle-axis vector."""
     rotation = np.asarray(matrix, dtype=np.float64)
@@ -67,6 +92,15 @@ def hrp_state(cartesian_pose: np.ndarray, gripper_position: float) -> np.ndarray
     if pose.shape != (6,) or not np.isfinite(pose).all() or not isfinite(gripper_position):
         raise ValueError("HRP state requires a finite 6-D pose and gripper position")
     return np.concatenate((pose, np.array([gripper_position], dtype=np.float32)))
+
+
+def dataset_euler_pose_to_hrp_pose(cartesian_pose: np.ndarray) -> np.ndarray:
+    """Map dataset ``xyz + roll/pitch/yaw`` to Trossen ``xyz + angle-axis``."""
+    pose = np.asarray(cartesian_pose, dtype=np.float64)
+    if pose.shape != (6,) or not np.isfinite(pose).all():
+        raise ValueError("Dataset Cartesian pose must contain six finite values")
+    rotation_vector = matrix_to_rotation_vector(euler_xyz_to_matrix(pose[3:6]))
+    return np.concatenate((pose[:3], rotation_vector)).astype(np.float32)
 
 
 def measured_hrp_velocity(

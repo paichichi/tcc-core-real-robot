@@ -14,7 +14,11 @@ import numpy as np
 import pyarrow.parquet as pq
 import yaml
 
-from tcc_real_robot.hrp_action_space import hrp_state, measured_hrp_velocity
+from tcc_real_robot.hrp_action_space import (
+    dataset_euler_pose_to_hrp_pose,
+    hrp_state,
+    measured_hrp_velocity,
+)
 from tcc_real_robot.policy_data import build_episode_records
 
 
@@ -114,10 +118,18 @@ def main() -> None:
                 dtype=np.float32,
             )
             timestamps = np.asarray(table["timestamp"].to_pylist(), dtype=np.float64)
+            if len(cartesian) != len(joint_states):
+                raise RuntimeError(
+                    f"Pose/state length mismatch in {record}: "
+                    f"{len(cartesian)} != {len(joint_states)}"
+                )
             states = np.stack(
                 [
-                    hrp_state(pose, float(joints[6]))
-                    for pose, joints in zip(cartesian, joint_states, strict=True)
+                    hrp_state(
+                        dataset_euler_pose_to_hrp_pose(pose),
+                        float(joints[6]),
+                    )
+                    for pose, joints in zip(cartesian, joint_states)
                 ]
             )
             actions = np.stack(
@@ -170,8 +182,11 @@ def main() -> None:
             "dataset_revision": config["dataset"]["revision"],
             "config": str(args.config),
             "camera": "cam_main",
-            "state_semantics": "cartesian_pose_angle_axis_6_plus_gripper_position",
-            "action_semantics": "base_frame_cartesian_velocity_6_plus_gripper_velocity",
+            "source_pose_semantics": "dataset_xyz_plus_intrinsic_xyz_roll_pitch_yaw",
+            "state_semantics": "trossen_xyz_plus_angle_axis_plus_gripper_position",
+            "action_semantics": (
+                "trossen_base_frame_vx_vy_vz_wx_wy_wz_plus_gripper_velocity"
+            ),
             "jpeg_quality": 95,
             "episodes": len(records),
             "actuation_enabled": False,

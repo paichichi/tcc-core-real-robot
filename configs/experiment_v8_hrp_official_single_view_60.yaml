@@ -29,7 +29,7 @@ model_hub:
   backbone_manifest: backbones/manifest.json
   policy_checkpoint_template: policies_v8_hrp_cartesian_velocity/{backbone}/{demonstrations}/checkpoint_150000.pt
   policy_metrics_template: policies_v8_hrp_cartesian_velocity/{backbone}/{demonstrations}/metrics.json
-  supported_backbones: [hrp_imagenet]
+  supported_backbones: [ours_rn50, ours_vit, r3m_unadapted, d4r_imagenet]
   supported_demonstrations: [60]
 
 policy:
@@ -51,6 +51,8 @@ policy:
   action_chunk_size: 1
   action_representation: cartesian_velocity
   action_frame: robot_base
+  dataset_pose_representation: intrinsic_xyz_roll_pitch_yaw
+  driver_pose_representation: angle_axis
   rotation_velocity: angle_axis_spatial
   gripper_action: velocity
   action_distribution: gaussian_mixture
