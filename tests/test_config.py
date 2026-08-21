@@ -167,6 +167,24 @@ def test_r3m_reference_policy_configuration() -> None:
     assert config["evaluation"]["max_rollout_steps"] == 359
 
 
+def test_r3m_multiview_proprio_policy_configuration() -> None:
+    config = load_yaml(
+        ROOT / "configs" / "experiment_r3m_multiview_proprio_60.yaml"
+    )
+    policy = config["policy"]
+    assert policy["implementation"] == "tcc_mlp_bc_v5_r3m_multiview_proprio"
+    assert policy["cameras"] == ["cam_main", "cam_wrist"]
+    assert policy["camera_fusion"] == "project_then_concat"
+    assert policy["camera_projection_dim"] == 128
+    assert policy["proprioception"] is True
+    assert policy["proprioception_dim"] == 7
+    assert policy["action_representation"] == "absolute"
+    assert policy["hidden_dimensions"] == [256, 256]
+    assert policy["input_batch_norm"] is True
+    assert policy["loss"] == "mse"
+    assert config["observations"]["cameras"] == ["cam_main", "cam_wrist"]
+
+
 def test_r3m_single_view_proprio_policy_configuration() -> None:
     config = load_yaml(
         ROOT / "configs" / "experiment_r3m_single_view_proprio_60.yaml"
@@ -174,6 +192,8 @@ def test_r3m_single_view_proprio_policy_configuration() -> None:
     policy = config["policy"]
     assert policy["implementation"] == "tcc_mlp_bc_v5_r3m_single_view_proprio"
     assert policy["cameras"] == ["cam_main"]
+    assert policy["camera_fusion"] == "raw_concat"
+    assert policy["camera_projection_dim"] == 0
     assert policy["proprioception"] is True
     assert policy["proprioception_dim"] == 7
     assert policy["action_representation"] == "absolute"

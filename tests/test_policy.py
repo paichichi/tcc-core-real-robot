@@ -15,7 +15,28 @@ def test_two_camera_policy_predicts_one_action() -> None:
     assert output.shape == (5, 7)
 
 
-def test_r3m_single_camera_policy_ignores_wrist_feature() -> None:
+def test_r3m_multiview_policy_projects_both_camera_features() -> None:
+    policy = TCCMLPPolicy(
+        feature_dim=8,
+        num_tasks=4,
+        proprio_dim=7,
+        camera_names=("cam_main", "cam_wrist"),
+        camera_projection_dim=4,
+    ).eval()
+    main = torch.randn(5, 8)
+    task = torch.tensor([0, 1, 2, 3, 0])
+    state = torch.randn(5, 7)
+
+    wrist = torch.randn(5, 8)
+    first = policy(main, wrist, task, state)
+    second = policy(main, wrist + 1.0, task, state)
+
+    assert first.shape == (5, 7)
+    assert policy.mlp[0].num_features == 4 + 4 + 4 + 7
+    assert not torch.allclose(first, second)
+
+
+def test_r3m_single_view_policy_ignores_wrist_feature() -> None:
     policy = TCCMLPPolicy(
         feature_dim=8,
         num_tasks=4,
@@ -30,6 +51,7 @@ def test_r3m_single_camera_policy_ignores_wrist_feature() -> None:
     second = policy(main, torch.randn(5, 8), task, state)
 
     assert first.shape == (5, 7)
+    assert policy.mlp[0].num_features == 8 + 4 + 7
     assert torch.allclose(first, second)
 
 

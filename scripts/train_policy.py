@@ -98,6 +98,8 @@ def evaluate_conditioning_sensitivity(
     """Measure whether predictions react to vision instead of only to time."""
     model.eval()
     visual_delta = torch.zeros(model.action_dim, device=device)
+    main_visual_delta = torch.zeros(model.action_dim, device=device)
+    wrist_visual_delta = torch.zeros(model.action_dim, device=device)
     progress_delta = torch.zeros(model.action_dim, device=device)
     examples = int(data["action"].shape[0])
     for start in range(0, examples, batch_size):
@@ -125,6 +127,20 @@ def evaluate_conditioning_sensitivity(
             proprioception,
             progress,
         )
+        shuffled_main = model(
+            torch.roll(batch["cam_main"].float(), shifts=shift, dims=0),
+            batch["cam_wrist"].float(),
+            batch["task_index"],
+            proprioception,
+            progress,
+        )
+        shuffled_wrist = model(
+            batch["cam_main"].float(),
+            torch.roll(batch["cam_wrist"].float(), shifts=shift, dims=0),
+            batch["task_index"],
+            proprioception,
+            progress,
+        )
         shuffled_progress = model(
             batch["cam_main"].float(),
             batch["cam_wrist"].float(),
@@ -136,12 +152,24 @@ def evaluate_conditioning_sensitivity(
         visual_delta += torch.sum(
             torch.abs(prediction - normalizer.denormalize(shuffled_visual)), dim=0
         )
+        main_visual_delta += torch.sum(
+            torch.abs(prediction - normalizer.denormalize(shuffled_main)), dim=0
+        )
+        wrist_visual_delta += torch.sum(
+            torch.abs(prediction - normalizer.denormalize(shuffled_wrist)), dim=0
+        )
         progress_delta += torch.sum(
             torch.abs(prediction - normalizer.denormalize(shuffled_progress)), dim=0
         )
     return {
         "validation_visual_shuffle_action_delta": (
             visual_delta / examples
+        ).cpu().tolist(),
+        "validation_main_camera_shuffle_action_delta": (
+            main_visual_delta / examples
+        ).cpu().tolist(),
+        "validation_wrist_camera_shuffle_action_delta": (
+            wrist_visual_delta / examples
         ).cpu().tolist(),
         "validation_progress_shuffle_action_delta": (
             progress_delta / examples
@@ -257,6 +285,14 @@ def main() -> None:
     camera_names = tuple(
         policy_config.get("cameras", ("cam_main", "cam_wrist"))
     )
+    camera_fusion = policy_config.get("camera_fusion", "raw_concat")
+    camera_projection_dim = int(policy_config.get("camera_projection_dim", 0))
+    if camera_fusion not in {"raw_concat", "project_then_concat"}:
+        raise ValueError(f"Unsupported camera fusion: {camera_fusion}")
+    if (camera_fusion == "project_then_concat") != (camera_projection_dim > 0):
+        raise ValueError(
+            "project_then_concat requires a positive camera_projection_dim"
+        )
     if "cam_wrist" in camera_names and train["cam_wrist"].shape[1] != feature_dim:
         raise ValueError("Camera feature dimensions differ")
 
@@ -280,6 +316,7 @@ def main() -> None:
         input_layer_norm=bool(policy_config["input_layer_norm"]),
         output_layer_scale=float(policy_config.get("output_layer_scale", 1.0)),
         camera_names=camera_names,
+        camera_projection_dim=camera_projection_dim,
     ).to(device)
     action_mean = train["action"].mean(dim=0)
     action_std = train["action"].std(dim=0)

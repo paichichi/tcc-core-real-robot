@@ -41,6 +41,7 @@ class TCCMLPPolicy(nn.Module):
         input_layer_norm: bool = False,
         output_layer_scale: float = 1.0,
         camera_names: Sequence[str] = ("cam_main", "cam_wrist"),
+        camera_projection_dim: int = 0,
     ) -> None:
         super().__init__()
         if proprio_dim < 0 or progress_dim < 0:
@@ -53,6 +54,8 @@ class TCCMLPPolicy(nn.Module):
             raise ValueError("Choose at most one input normalization layer")
         if output_layer_scale <= 0:
             raise ValueError("Output-layer scale must be positive")
+        if camera_projection_dim < 0:
+            raise ValueError("Camera projection dimension cannot be negative")
         camera_names = tuple(camera_names)
         if camera_names not in (("cam_main",), ("cam_main", "cam_wrist")):
             raise ValueError(
@@ -65,8 +68,26 @@ class TCCMLPPolicy(nn.Module):
         self.proprio_dim = proprio_dim
         self.progress_dim = progress_dim
         self.camera_names = camera_names
+        self.camera_projection_dim = camera_projection_dim
+        projected_feature_dim = camera_projection_dim or feature_dim
+        if camera_projection_dim:
+            self.cam_main_projection: nn.Module = nn.Sequential(
+                nn.Linear(feature_dim, camera_projection_dim), nn.ReLU()
+            )
+            self.cam_wrist_projection: nn.Module | None = (
+                nn.Sequential(
+                    nn.Linear(feature_dim, camera_projection_dim), nn.ReLU()
+                )
+                if "cam_wrist" in camera_names
+                else None
+            )
+        else:
+            self.cam_main_projection = nn.Identity()
+            self.cam_wrist_projection = (
+                nn.Identity() if "cam_wrist" in camera_names else None
+            )
         input_dim = (
-            len(camera_names) * feature_dim
+            len(camera_names) * projected_feature_dim
             + num_tasks
             + proprio_dim
             + progress_dim
@@ -103,11 +124,13 @@ class TCCMLPPolicy(nn.Module):
                 f"got {tuple(cam_main.shape)}"
             )
         task = F.one_hot(task_index.long(), self.num_tasks).to(cam_main.dtype)
-        inputs = [cam_main]
+        inputs = [self.cam_main_projection(cam_main)]
         if "cam_wrist" in self.camera_names:
             if cam_wrist is None or cam_main.shape != cam_wrist.shape:
                 raise ValueError("Camera feature tensors must have identical shapes")
-            inputs.append(cam_wrist)
+            if self.cam_wrist_projection is None:
+                raise RuntimeError("Wrist projection was not initialized")
+            inputs.append(self.cam_wrist_projection(cam_wrist))
         inputs.append(task)
         if self.proprio_dim:
             if proprioception is None:

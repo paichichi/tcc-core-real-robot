@@ -39,6 +39,8 @@ def validate_policy_contract(
     actual = bundle.config["policy"]
     fields = (
         "cameras",
+        "camera_fusion",
+        "camera_projection_dim",
         "proprioception",
         "proprioception_dim",
         "action_representation",
@@ -135,6 +137,14 @@ def load_policy_bundle(
     if not isinstance(config, dict) or not isinstance(config.get("policy"), dict):
         raise TypeError("Policy checkpoint contains an invalid config")
     policy_config = config["policy"]
+    camera_fusion = policy_config.get("camera_fusion", "raw_concat")
+    camera_projection_dim = int(policy_config.get("camera_projection_dim", 0))
+    if camera_fusion not in {"raw_concat", "project_then_concat"}:
+        raise ValueError(f"Unsupported camera fusion: {camera_fusion}")
+    if (camera_fusion == "project_then_concat") != (camera_projection_dim > 0):
+        raise ValueError(
+            "project_then_concat requires a positive camera_projection_dim"
+        )
     if int(policy_config.get("action_chunk_size", -1)) != 1:
         raise ValueError("This runner requires a single-step policy checkpoint")
     uses_proprioception = policy_config.get("proprioception") is True
@@ -177,6 +187,7 @@ def load_policy_bundle(
         camera_names=tuple(
             policy_config.get("cameras", ("cam_main", "cam_wrist"))
         ),
+        camera_projection_dim=camera_projection_dim,
     )
     model.load_state_dict(checkpoint["model"], strict=True)
     model.eval().to(device)

@@ -14,14 +14,12 @@ dataset:
 
 observations:
   fps: 20
-  # Both streams stay live for synchronization and operator diagnostics. Only
-  # cam_main enters the policy, matching R3M's downstream BC evaluation setup.
   cameras: [cam_main, cam_wrist]
   resolution: [640, 480]
 
 backbone:
   source: huggingface
-  hub_name: ours_rn50
+  hub_name: ours_vit
   checkpoint: null
   tcc_source_root: TBD
   frozen: true
@@ -38,11 +36,11 @@ model_hub:
   supported_demonstrations: [60]
 
 policy:
-  implementation: tcc_mlp_bc_v5_r3m_single_view_proprio
-  cameras: [cam_main]
+  implementation: tcc_mlp_bc_v5_r3m_multiview_proprio
+  cameras: [cam_main, cam_wrist]
   shared_camera_backbone: true
-  camera_fusion: raw_concat
-  camera_projection_dim: 0
+  camera_fusion: project_then_concat
+  camera_projection_dim: 128
   task_conditioning: one_hot
   number_of_tasks: 4
   proprioception: true
