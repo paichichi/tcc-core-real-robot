@@ -41,6 +41,7 @@ def validate_policy_contract(
         "cameras",
         "camera_fusion",
         "camera_projection_dim",
+        "camera_gate_hidden_dim",
         "proprioception",
         "proprioception_dim",
         "action_representation",
@@ -139,11 +140,30 @@ def load_policy_bundle(
     policy_config = config["policy"]
     camera_fusion = policy_config.get("camera_fusion", "raw_concat")
     camera_projection_dim = int(policy_config.get("camera_projection_dim", 0))
-    if camera_fusion not in {"raw_concat", "project_then_concat"}:
+    camera_gate_hidden_dim = int(policy_config.get("camera_gate_hidden_dim", 0))
+    if camera_fusion not in {
+        "raw_concat",
+        "project_then_concat",
+        "gated_residual",
+    }:
         raise ValueError(f"Unsupported camera fusion: {camera_fusion}")
-    if (camera_fusion == "project_then_concat") != (camera_projection_dim > 0):
+    if camera_fusion == "raw_concat" and camera_projection_dim:
+        raise ValueError("raw_concat cannot use camera projections")
+    if camera_fusion == "project_then_concat" and not camera_projection_dim:
         raise ValueError(
             "project_then_concat requires a positive camera_projection_dim"
+        )
+    camera_names = tuple(
+        policy_config.get("cameras", ("cam_main", "cam_wrist"))
+    )
+    if camera_fusion == "gated_residual" and (
+        camera_names != ("cam_main", "cam_wrist")
+        or camera_projection_dim <= 0
+        or camera_gate_hidden_dim <= 0
+    ):
+        raise ValueError(
+            "gated_residual requires both cameras and positive projection/gate "
+            "dimensions"
         )
     if int(policy_config.get("action_chunk_size", -1)) != 1:
         raise ValueError("This runner requires a single-step policy checkpoint")
@@ -184,10 +204,10 @@ def load_policy_bundle(
         input_batch_norm=bool(policy_config["input_batch_norm"]),
         input_layer_norm=bool(policy_config.get("input_layer_norm", False)),
         output_layer_scale=float(policy_config.get("output_layer_scale", 1.0)),
-        camera_names=tuple(
-            policy_config.get("cameras", ("cam_main", "cam_wrist"))
-        ),
+        camera_names=camera_names,
+        camera_fusion=camera_fusion,
         camera_projection_dim=camera_projection_dim,
+        camera_gate_hidden_dim=camera_gate_hidden_dim,
     )
     model.load_state_dict(checkpoint["model"], strict=True)
     model.eval().to(device)

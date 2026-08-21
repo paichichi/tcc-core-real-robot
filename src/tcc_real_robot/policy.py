@@ -41,7 +41,9 @@ class TCCMLPPolicy(nn.Module):
         input_layer_norm: bool = False,
         output_layer_scale: float = 1.0,
         camera_names: Sequence[str] = ("cam_main", "cam_wrist"),
+        camera_fusion: str = "raw_concat",
         camera_projection_dim: int = 0,
+        camera_gate_hidden_dim: int = 0,
     ) -> None:
         super().__init__()
         if proprio_dim < 0 or progress_dim < 0:
@@ -56,10 +58,31 @@ class TCCMLPPolicy(nn.Module):
             raise ValueError("Output-layer scale must be positive")
         if camera_projection_dim < 0:
             raise ValueError("Camera projection dimension cannot be negative")
+        if camera_gate_hidden_dim < 0:
+            raise ValueError("Camera gate hidden dimension cannot be negative")
         camera_names = tuple(camera_names)
         if camera_names not in (("cam_main",), ("cam_main", "cam_wrist")):
             raise ValueError(
                 "Camera inputs must be cam_main alone or cam_main plus cam_wrist"
+            )
+        if camera_fusion not in {
+            "raw_concat",
+            "project_then_concat",
+            "gated_residual",
+        }:
+            raise ValueError(f"Unsupported camera fusion: {camera_fusion}")
+        if camera_fusion == "raw_concat" and camera_projection_dim:
+            raise ValueError("raw_concat cannot use camera projections")
+        if camera_fusion == "project_then_concat" and not camera_projection_dim:
+            raise ValueError("project_then_concat requires camera projections")
+        if camera_fusion == "gated_residual" and (
+            camera_names != ("cam_main", "cam_wrist")
+            or not camera_projection_dim
+            or not camera_gate_hidden_dim
+        ):
+            raise ValueError(
+                "gated_residual requires both cameras and positive projection/gate "
+                "dimensions"
             )
 
         self.feature_dim = feature_dim
@@ -68,15 +91,21 @@ class TCCMLPPolicy(nn.Module):
         self.proprio_dim = proprio_dim
         self.progress_dim = progress_dim
         self.camera_names = camera_names
+        self.camera_fusion = camera_fusion
         self.camera_projection_dim = camera_projection_dim
+        self.camera_gate_hidden_dim = camera_gate_hidden_dim
         projected_feature_dim = camera_projection_dim or feature_dim
         if camera_projection_dim:
-            self.cam_main_projection: nn.Module = nn.Sequential(
-                nn.Linear(feature_dim, camera_projection_dim), nn.ReLU()
+            self.cam_main_projection: nn.Module = self._make_projection(
+                feature_dim,
+                camera_projection_dim,
+                layer_norm=camera_fusion == "gated_residual",
             )
             self.cam_wrist_projection: nn.Module | None = (
-                nn.Sequential(
-                    nn.Linear(feature_dim, camera_projection_dim), nn.ReLU()
+                self._make_projection(
+                    feature_dim,
+                    camera_projection_dim,
+                    layer_norm=camera_fusion == "gated_residual",
                 )
                 if "cam_wrist" in camera_names
                 else None
@@ -86,12 +115,20 @@ class TCCMLPPolicy(nn.Module):
             self.cam_wrist_projection = (
                 nn.Identity() if "cam_wrist" in camera_names else None
             )
-        input_dim = (
-            len(camera_names) * projected_feature_dim
-            + num_tasks
-            + proprio_dim
-            + progress_dim
-        )
+        conditioning_dim = num_tasks + proprio_dim + progress_dim
+        self.camera_gate: nn.Module | None = None
+        if camera_fusion == "gated_residual":
+            gate_input_dim = 2 * projected_feature_dim + conditioning_dim
+            self.camera_gate = nn.Sequential(
+                nn.Linear(gate_input_dim, camera_gate_hidden_dim),
+                nn.ReLU(),
+                nn.Linear(camera_gate_hidden_dim, projected_feature_dim),
+                nn.Sigmoid(),
+            )
+            visual_input_dim = projected_feature_dim
+        else:
+            visual_input_dim = len(camera_names) * projected_feature_dim
+        input_dim = visual_input_dim + conditioning_dim
 
         layers: list[nn.Module] = []
         if input_batch_norm:
@@ -110,6 +147,16 @@ class TCCMLPPolicy(nn.Module):
         layers.append(output_layer)
         self.mlp = nn.Sequential(*layers)
 
+    @staticmethod
+    def _make_projection(
+        feature_dim: int, projection_dim: int, *, layer_norm: bool
+    ) -> nn.Sequential:
+        layers: list[nn.Module] = [nn.Linear(feature_dim, projection_dim)]
+        if layer_norm:
+            layers.append(nn.LayerNorm(projection_dim))
+        layers.append(nn.ReLU())
+        return nn.Sequential(*layers)
+
     def forward(
         self,
         cam_main: torch.Tensor,
@@ -124,20 +171,21 @@ class TCCMLPPolicy(nn.Module):
                 f"got {tuple(cam_main.shape)}"
             )
         task = F.one_hot(task_index.long(), self.num_tasks).to(cam_main.dtype)
-        inputs = [self.cam_main_projection(cam_main)]
+        main_embedding = self.cam_main_projection(cam_main)
+        wrist_embedding: torch.Tensor | None = None
         if "cam_wrist" in self.camera_names:
             if cam_wrist is None or cam_main.shape != cam_wrist.shape:
                 raise ValueError("Camera feature tensors must have identical shapes")
             if self.cam_wrist_projection is None:
                 raise RuntimeError("Wrist projection was not initialized")
-            inputs.append(self.cam_wrist_projection(cam_wrist))
-        inputs.append(task)
+            wrist_embedding = self.cam_wrist_projection(cam_wrist)
+        conditioning = [task]
         if self.proprio_dim:
             if proprioception is None:
                 raise ValueError("This policy requires proprioception")
             if proprioception.shape != (cam_main.shape[0], self.proprio_dim):
                 raise ValueError("Unexpected proprioception shape")
-            inputs.append(proprioception)
+            conditioning.append(proprioception)
         elif proprioception is not None:
             raise ValueError("This policy was configured without proprioception")
         if self.progress_dim:
@@ -145,7 +193,18 @@ class TCCMLPPolicy(nn.Module):
                 raise ValueError("This policy requires episode progress")
             if progress.shape != (cam_main.shape[0], self.progress_dim):
                 raise ValueError("Unexpected episode progress shape")
-            inputs.append(progress)
+            conditioning.append(progress)
         elif progress is not None:
             raise ValueError("This policy was configured without episode progress")
-        return self.mlp(torch.cat(inputs, dim=-1))
+        if self.camera_fusion == "gated_residual":
+            if wrist_embedding is None or self.camera_gate is None:
+                raise RuntimeError("Gated camera fusion was not initialized")
+            gate = self.camera_gate(
+                torch.cat([main_embedding, wrist_embedding, *conditioning], dim=-1)
+            )
+            visual_inputs = [main_embedding + gate * wrist_embedding]
+        else:
+            visual_inputs = [main_embedding]
+            if wrist_embedding is not None:
+                visual_inputs.append(wrist_embedding)
+        return self.mlp(torch.cat([*visual_inputs, *conditioning], dim=-1))

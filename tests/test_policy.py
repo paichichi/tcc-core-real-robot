@@ -21,6 +21,7 @@ def test_r3m_multiview_policy_projects_both_camera_features() -> None:
         num_tasks=4,
         proprio_dim=7,
         camera_names=("cam_main", "cam_wrist"),
+        camera_fusion="project_then_concat",
         camera_projection_dim=4,
     ).eval()
     main = torch.randn(5, 8)
@@ -34,6 +35,42 @@ def test_r3m_multiview_policy_projects_both_camera_features() -> None:
     assert first.shape == (5, 7)
     assert policy.mlp[0].num_features == 4 + 4 + 4 + 7
     assert not torch.allclose(first, second)
+
+
+def test_v6_gated_policy_fuses_wrist_into_compact_visual_input() -> None:
+    policy = TCCMLPPolicy(
+        feature_dim=8,
+        num_tasks=4,
+        proprio_dim=7,
+        camera_names=("cam_main", "cam_wrist"),
+        camera_fusion="gated_residual",
+        camera_projection_dim=4,
+        camera_gate_hidden_dim=5,
+    ).eval()
+    main = torch.randn(5, 8)
+    wrist = torch.randn(5, 8)
+    task = torch.tensor([0, 1, 2, 3, 0])
+    state = torch.randn(5, 7)
+
+    first = policy(main, wrist, task, state)
+    second = policy(main, wrist + 1.0, task, state)
+
+    assert first.shape == (5, 7)
+    assert policy.camera_gate is not None
+    assert policy.mlp[0].num_features == 4 + 4 + 7
+    assert not torch.allclose(first, second)
+
+
+def test_v6_gated_policy_requires_two_cameras() -> None:
+    with pytest.raises(ValueError, match="gated_residual requires both cameras"):
+        TCCMLPPolicy(
+            feature_dim=8,
+            num_tasks=4,
+            camera_names=("cam_main",),
+            camera_fusion="gated_residual",
+            camera_projection_dim=4,
+            camera_gate_hidden_dim=4,
+        )
 
 
 def test_r3m_single_view_policy_ignores_wrist_feature() -> None:

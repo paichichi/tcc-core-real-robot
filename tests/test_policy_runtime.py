@@ -140,6 +140,66 @@ def test_restore_and_predict_denormalized_action(tmp_path: Path) -> None:
     assert torch.isfinite(action).all()
 
 
+def test_restore_and_predict_v6_gated_multiview_action(tmp_path: Path) -> None:
+    model = TCCMLPPolicy(
+        feature_dim=3,
+        num_tasks=4,
+        proprio_dim=7,
+        camera_fusion="gated_residual",
+        camera_projection_dim=4,
+        camera_gate_hidden_dim=5,
+    )
+    checkpoint = tmp_path / "v6.pt"
+    torch.save(
+        {
+            "model": model.state_dict(),
+            "action_mean": torch.zeros(7),
+            "action_std": torch.ones(7),
+            "state_mean": torch.zeros(7),
+            "state_std": torch.ones(7),
+            "feature_dim": 3,
+            "config": {
+                "dataset": {"tasks": ["a", "b", "c", "d"]},
+                "policy": {
+                    "number_of_tasks": 4,
+                    "action_dim": 7,
+                    "action_chunk_size": 1,
+                    "action_representation": "absolute",
+                    "hidden_dimensions": [256, 256],
+                    "input_batch_norm": True,
+                    "input_layer_norm": False,
+                    "proprioception": True,
+                    "proprioception_dim": 7,
+                    "cameras": ["cam_main", "cam_wrist"],
+                    "camera_fusion": "gated_residual",
+                    "camera_projection_dim": 4,
+                    "camera_gate_hidden_dim": 5,
+                },
+            },
+            "step": 50_000,
+        },
+        checkpoint,
+    )
+    bundle = load_policy_bundle(
+        checkpoint, expected_feature_dim=3, device=torch.device("cpu")
+    )
+    frame = np.zeros((48, 64, 3), dtype=np.uint8)
+
+    action = predict_action(
+        MeanBackbone().eval(),
+        bundle,
+        frame,
+        frame,
+        task_index=2,
+        image_size=32,
+        device=torch.device("cpu"),
+        observation_state=np.zeros(7, dtype=np.float32),
+    )
+
+    assert action.shape == (7,)
+    assert torch.isfinite(action).all()
+
+
 def test_policy_feature_mismatch_is_rejected(tmp_path: Path) -> None:
     checkpoint = tmp_path / "policy.pt"
     torch.save(checkpoint_payload(), checkpoint)

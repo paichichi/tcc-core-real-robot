@@ -287,11 +287,27 @@ def main() -> None:
     )
     camera_fusion = policy_config.get("camera_fusion", "raw_concat")
     camera_projection_dim = int(policy_config.get("camera_projection_dim", 0))
-    if camera_fusion not in {"raw_concat", "project_then_concat"}:
+    camera_gate_hidden_dim = int(policy_config.get("camera_gate_hidden_dim", 0))
+    if camera_fusion not in {
+        "raw_concat",
+        "project_then_concat",
+        "gated_residual",
+    }:
         raise ValueError(f"Unsupported camera fusion: {camera_fusion}")
-    if (camera_fusion == "project_then_concat") != (camera_projection_dim > 0):
+    if camera_fusion == "raw_concat" and camera_projection_dim:
+        raise ValueError("raw_concat cannot use camera projections")
+    if camera_fusion == "project_then_concat" and not camera_projection_dim:
         raise ValueError(
             "project_then_concat requires a positive camera_projection_dim"
+        )
+    if camera_fusion == "gated_residual" and (
+        camera_names != ("cam_main", "cam_wrist")
+        or camera_projection_dim <= 0
+        or camera_gate_hidden_dim <= 0
+    ):
+        raise ValueError(
+            "gated_residual requires both cameras and positive projection/gate "
+            "dimensions"
         )
     if "cam_wrist" in camera_names and train["cam_wrist"].shape[1] != feature_dim:
         raise ValueError("Camera feature dimensions differ")
@@ -316,7 +332,9 @@ def main() -> None:
         input_layer_norm=bool(policy_config["input_layer_norm"]),
         output_layer_scale=float(policy_config.get("output_layer_scale", 1.0)),
         camera_names=camera_names,
+        camera_fusion=camera_fusion,
         camera_projection_dim=camera_projection_dim,
+        camera_gate_hidden_dim=camera_gate_hidden_dim,
     ).to(device)
     action_mean = train["action"].mean(dim=0)
     action_std = train["action"].std(dim=0)
