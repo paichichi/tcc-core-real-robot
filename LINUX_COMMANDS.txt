@@ -3,10 +3,10 @@ cd ~/tcc-core-real-robot
 source .venv/bin/activate
 
 
-hf download Chipaipai/tcc-core-real-robot-policies policies_v9_r3m_robomimic/ours_rn50/i2000_smoke/checkpoint_best.pt policies_v9_r3m_robomimic/ours_rn50/i2000_smoke/metrics.json policies_v9_r3m_robomimic/ours_rn50/i2000_smoke/training_config.yaml --revision 41fde4ede3bbe12be523e1ad37b2a426ff8b84e3 --local-dir checkpoints/v9_r3m_robomimic_smoke
+hf download Chipaipai/tcc-core-real-robot-policies policies_v9_r3m_robomimic/ours_rn50/i10000_smoke/checkpoint_best.pt policies_v9_r3m_robomimic/ours_rn50/i10000_smoke/metrics.json policies_v9_r3m_robomimic/ours_rn50/i10000_smoke/training_config.yaml --revision d9c8aabc7d5f2ff9bad560b2b8eca86a2711ffd3 --local-dir checkpoints/v9_r3m_robomimic_10k
 
 
-python scripts/eval_demo_first_frames.py --config configs/experiment_v9_r3m_robomimic_100.yaml --dataset-root datasets/pick_and_place_4_object_diverse --backbone ours_rn50 --demonstrations 100 --policy-checkpoint checkpoints/v9_r3m_robomimic_smoke/policies_v9_r3m_robomimic/ours_rn50/i2000_smoke/checkpoint_best.pt --task carrot --episodes 20 --recorded-envelope-multiplier 2.0 --tcc-source-root /home/robotarm/TCC-core --device auto
+python scripts/eval_demo_first_frames.py --config configs/experiment_v9_r3m_robomimic_100.yaml --dataset-root datasets/pick_and_place_4_object_diverse --backbone ours_rn50 --demonstrations 100 --policy-checkpoint checkpoints/v9_r3m_robomimic_10k/policies_v9_r3m_robomimic/ours_rn50/i10000_smoke/checkpoint_best.pt --task carrot --episodes 20 --recorded-envelope-multiplier 2.0 --tcc-source-root /home/robotarm/TCC-core --device auto
 
 
-python scripts/run_policy.py --config configs/experiment_v9_r3m_robomimic_100.yaml --backbone ours_rn50 --demonstrations 100 --policy-checkpoint checkpoints/v9_r3m_robomimic_smoke/policies_v9_r3m_robomimic/ours_rn50/i2000_smoke/checkpoint_best.pt --task carrot --online --execute-home --max-steps 359 --device auto
+python scripts/run_policy.py --config configs/experiment_v9_r3m_robomimic_100.yaml --backbone ours_rn50 --demonstrations 100 --policy-checkpoint checkpoints/v9_r3m_robomimic_10k/policies_v9_r3m_robomimic/ours_rn50/i10000_smoke/checkpoint_best.pt --task carrot --online --execute-home --max-steps 359 --device auto
