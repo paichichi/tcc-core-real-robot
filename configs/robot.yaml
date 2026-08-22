@@ -44,7 +44,7 @@ action_contract:
 # This matches the original LeRobot collector and the successful demo replay.
 # Learned-policy actuation remains fail-closed until the new checkpoint passes
 # shadow diagnostics and an explicitly supervised bounded rollout.
-hrp_driver_contract:
+driver_contract:
   action_representation: absolute
   action_space: joint_position
   execution: bounded_joint_position_rollout

@@ -35,7 +35,7 @@ def test_episode_split_has_no_frame_level_leakage(tmp_path: Path) -> None:
         assert by_split["validation"].isdisjoint(by_split["test"])
 
 
-def test_episode_records_can_preserve_source_order_for_hrp(tmp_path: Path) -> None:
+def test_episode_records_can_preserve_source_order(tmp_path: Path) -> None:
     metadata = tmp_path / "task" / "meta"
     metadata.mkdir(parents=True)
     rows = [f'{{"episode_index": {index}}}' for index in range(5)]

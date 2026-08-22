@@ -13,7 +13,6 @@ from torchvision.transforms import functional as vision_f
 
 from tcc_real_robot.policy import (
     ActionNormalizer,
-    HRPSingleViewGaussianMixturePolicy,
     R3MRobomimicPolicy,
     TCCMLPGaussianMixturePolicy,
     TCCMLPPolicy,
@@ -31,7 +30,7 @@ _NORMALIZATION_CACHE: dict[
 class PolicyBundle:
     """A restored policy head and the action normalizer saved with it."""
 
-    model: TCCMLPPolicy | HRPSingleViewGaussianMixturePolicy | R3MRobomimicPolicy
+    model: TCCMLPPolicy | R3MRobomimicPolicy
     normalizer: ActionNormalizer
     state_normalizer: ActionNormalizer | None
     config: dict[str, Any]
@@ -240,20 +239,6 @@ def load_policy_bundle(
             hidden_dims=tuple(policy_config["hidden_dimensions"]),
             output_layer_scale=float(policy_config.get("output_layer_scale", 0.01)),
         )
-    elif architecture == "hrp_state_token_gmm":
-        if camera_names != ("cam_main",) or progress_dim or not uses_proprioception:
-            raise ValueError("HRP state-token policy requires one camera and state")
-        model: TCCMLPPolicy | HRPSingleViewGaussianMixturePolicy = (
-            HRPSingleViewGaussianMixturePolicy(
-                feature_dim=feature_dim,
-                action_dim=int(policy_config["action_dim"]),
-                state_dim=proprio_dim,
-                hidden_dims=tuple(policy_config["hidden_dimensions"]),
-                num_modes=int(policy_config.get("num_modes", 5)),
-                dropout=float(policy_config.get("dropout", 0.2)),
-                min_std=float(policy_config.get("min_std", 1e-4)),
-            )
-        )
     else:
         action_distribution = str(
             policy_config.get("action_distribution", "deterministic")
@@ -420,31 +405,11 @@ def predict_action(
                 "gmm_inference_override must be None or "
                 "'highest-probability-mode'"
             )
-        deterministic_checkpoint_inference = policy_config.get(
-            "deterministic_inference"
-        ) in {"highest_probability_mode_mean", "highest-probability-mode"}
         if isinstance(bundle.model, R3MRobomimicPolicy):
             if cam_wrist_features is None:
                 raise RuntimeError("R3M multi-view policy requires cam_wrist")
             normalized_action = bundle.model(
                 cam_main_features, cam_wrist_features
-            )
-        elif (
-            (
-                gmm_inference_override == "highest-probability-mode"
-                or (
-                    gmm_inference_override is None
-                    and deterministic_checkpoint_inference
-                )
-            )
-            and isinstance(bundle.model, HRPSingleViewGaussianMixturePolicy)
-        ):
-            normalized_action = bundle.model.highest_probability_mean(
-                cam_main_features,
-                cam_wrist_features,
-                task_tensor,
-                normalized_state,
-                progress,
             )
         else:
             normalized_action = bundle.model(

@@ -63,7 +63,6 @@ ignore = ["EXE001"]
 
 [tool.ruff.lint.per-file-ignores]
 # Optional heavy dependencies must be checked before importing project modules.
-"tests/test_hrp_image_data.py" = ["E402"]
 "tests/test_policy.py" = ["E402"]
 "tests/test_policy_runtime.py" = ["E402"]
 "tests/test_tcc_backbone.py" = ["E402"]

@@ -58,7 +58,7 @@ def parse_args() -> argparse.Namespace:
         "--gmm-inference",
         choices=("checkpoint", "highest-probability-mode"),
         default="highest-probability-mode",
-        help="Use deterministic highest-probability HRP mode by default.",
+        help="Use the deterministic highest-probability GMM mode.",
     )
     parser.add_argument("--output-dir", type=Path, default=Path("outputs"))
     return parser.parse_args()
@@ -121,13 +121,6 @@ def main() -> None:
             int(split["test_episodes_per_task"]),
         )
         shuffle_episodes = True
-    elif split.get("protocol") == "hrp_fixed_transition_holdout":
-        split_sizes = (
-            int(config["dataset"]["demonstrations_per_task"]),
-            0,
-            0,
-        )
-        shuffle_episodes = False
     else:
         raise ValueError(f"Unsupported episode selection protocol: {split}")
     records = build_episode_records(

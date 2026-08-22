@@ -21,13 +21,13 @@ class FakeViT(torch.nn.Module):
         return images.new_zeros((images.shape[0], self.output_dim))
 
 
-def test_raw_hrp_d4r_mae_vit_uses_official_cls_pooling(
+def test_raw_d4r_mae_vit_uses_cls_pooling(
     tmp_path, monkeypatch
 ) -> None:
     source_root = tmp_path / "tcc"
     (source_root / "xirl").mkdir(parents=True)
     (source_root / "xirl" / "models.py").write_text("# fake\n")
-    checkpoint = tmp_path / "HRP_IN.pth"
+    checkpoint = tmp_path / "D4R_IN.pth"
     torch.save(
         {
             "model": {

@@ -117,7 +117,7 @@ def load_frozen_tcc_backbone(
         and "cls_token" in model_state
         and any(key.startswith("blocks.") for key in model_state)
     ):
-        # D4R/HRP ImageNet releases are raw MAE/timm-style ViT checkpoints.
+        # D4R ImageNet releases are raw MAE/timm-style ViT checkpoints.
         # ``ViTB16Backbone.load_pretrained`` performs the audited key mapping
         # into torchvision's ViT-B/16 implementation.
         backbone_name = "vit_b16"
@@ -128,10 +128,10 @@ def load_frozen_tcc_backbone(
             train_adapters=False,
         )
         if not hasattr(backbone, "pooling"):
-            raise TypeError("MAE/HRP ViT backbone does not expose its pooling mode")
-        # HRP's released ViT downstream config is explicit: `use_cls: True`.
+            raise TypeError("MAE ViT backbone does not expose its pooling mode")
+        # The released D4R downstream config is explicit: `use_cls: True`.
         # TCC-trained ViTs retain their native patch-mean contract in the branch
-        # above; only raw D4R/HRP MAE releases use the CLS representation here.
+        # above; only raw D4R MAE releases use the CLS representation here.
         backbone.pooling = "cls"
         source_format = "mae-vit-release"
         image_size = 224
@@ -175,7 +175,7 @@ def load_frozen_tcc_backbone(
         image_size = 224
     else:
         raise TypeError(
-            "Unsupported TCC/R3M/HRAlign/D4R/HRP checkpoint format"
+            "Unsupported TCC/R3M/HRAlign/D4R checkpoint format"
         )
 
     backbone = _freeze(backbone, device)

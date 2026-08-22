@@ -105,9 +105,9 @@ def parse_args() -> argparse.Namespace:
         choices=("checkpoint", "highest-probability-mode"),
         default="checkpoint",
         help=(
-            "Override HRP GMM deployment inference. 'checkpoint' preserves the "
-            "official categorical sampling; 'highest-probability-mode' is "
-            "deterministic and intended for shadow comparison before actuation."
+            "Override GMM deployment inference. 'checkpoint' preserves the "
+            "checkpoint behavior; 'highest-probability-mode' requests "
+            "deterministic shadow comparison before actuation."
         ),
     )
     parser.add_argument("--controller-timeout", type=float, default=20.0)
@@ -361,7 +361,7 @@ def validate_joint_position_driver_contract(
     policy = experiment_config["policy"]
     if policy.get("action_space") != "joint_position":
         return
-    driver = robot_config["hrp_driver_contract"]
+    driver = robot_config["driver_contract"]
     expected = {
         "action_representation": "absolute",
         "action_space": "joint_position",
@@ -561,9 +561,8 @@ def main() -> None:
     )
     if action_representation == "cartesian_velocity" and args.execute_clipped_step:
         raise RuntimeError(
-            "HRP Cartesian-velocity checkpoints currently run shadow-only in "
-            "run_policy.py. The isolated TrossenHRPDriverAdapter is implemented, "
-            "but must not be routed through the legacy joint-position limiter."
+            "Cartesian-velocity checkpoints run shadow-only and must not be routed "
+            "through the joint-position limiter."
         )
     runtime_execution_delta_gain: float | None = None
     if action_representation == "future_delta":
