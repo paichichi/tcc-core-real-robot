@@ -130,6 +130,37 @@ def test_all_actuation_modes_obey_shadow_release_gate() -> None:
     module.assert_shadow_only(robot, False)
 
 
+def test_supervised_bounded_test_uses_verified_replay_and_safety_caps() -> None:
+    module = load_run_policy()
+    robot = {
+        "action_contract": {
+            "physical_actuation": "VERIFIED_BY_359_FRAME_DEMO_REPLAY",
+            "arm_units": "rad",
+            "gripper_units": "m",
+        },
+        "safety": {
+            "workspace_limits": "CALIBRATING",
+            "max_joint_delta_rad": 0.07,
+            "max_gripper_delta_m": 0.003,
+        },
+        "policy_evaluation": {
+            "force_first_action_home": True,
+            "clipped_rollout": {
+                "max_action_delta": [0.04, 0.06, 0.08, 0.13, 0.05, 0.09, 0.004],
+                "max_command_lead": [0.08, 0.12, 0.16, 0.26, 0.10, 0.18, 0.008],
+                "min_time_to_move_multiplier": 2.0,
+                "dataset_action_limits": {"task": {"min": [0.0] * 7, "max": [1.0] * 7}},
+            },
+        },
+    }
+
+    module.assert_shadow_only(robot, True, supervised_bounded_test=True)
+
+    clipped = robot["policy_evaluation"]["clipped_rollout"]
+    assert clipped["max_action_delta"] == [0.04, 0.06, 0.07, 0.07, 0.05, 0.07, 0.003]
+    assert clipped["max_command_lead"] == [0.08, 0.12, 0.14, 0.14, 0.10, 0.14, 0.006]
+
+
 class FakeCapture:
     def __init__(self, grabs: list[bool]) -> None:
         self.grabs = iter(grabs)

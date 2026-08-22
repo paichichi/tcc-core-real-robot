@@ -148,6 +148,15 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Acknowledge that the physical emergency stop is immediately ready.",
     )
+    parser.add_argument(
+        "--supervised-bounded-test",
+        action="store_true",
+        help=(
+            "Permit an explicitly supervised --execute-policy rollout after a "
+            "verified demo replay. The first action remains anchored at home and "
+            "per-step limits are capped by the configured safety maxima."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -339,9 +348,43 @@ def resolve_task(task: str, task_names: list[str]) -> tuple[int, str]:
     return task_names.index(resolved), resolved
 
 
-def assert_shadow_only(robot_config: dict[str, Any], execute: bool) -> None:
+def configure_supervised_bounded_test(robot_config: dict[str, Any]) -> None:
+    """Apply the narrow release contract for a supervised bounded rollout."""
+    contract = robot_config.get("action_contract", {})
+    if contract.get("physical_actuation") != "VERIFIED_BY_359_FRAME_DEMO_REPLAY":
+        raise RuntimeError("Supervised rollout requires a verified 359-frame replay")
+    if contract.get("arm_units") != "rad" or contract.get("gripper_units") != "m":
+        raise RuntimeError("Supervised rollout requires the verified rad/m contract")
+    evaluation = robot_config.get("policy_evaluation", {})
+    if evaluation.get("force_first_action_home") is not True:
+        raise RuntimeError("Supervised rollout requires the first-action home anchor")
+    clipped = evaluation.get("clipped_rollout", {})
+    if not clipped.get("dataset_action_limits"):
+        raise RuntimeError("Supervised rollout requires dataset absolute action limits")
+    safety = robot_config.get("safety", {})
+    arm_cap = float(safety["max_joint_delta_rad"])
+    gripper_cap = float(safety["max_gripper_delta_m"])
+    configured = [float(value) for value in clipped["max_action_delta"]]
+    if len(configured) != 7 or arm_cap <= 0 or gripper_cap <= 0:
+        raise RuntimeError("Supervised rollout safety limits are invalid")
+    bounded = [min(value, arm_cap) for value in configured[:6]]
+    bounded.append(min(configured[6], gripper_cap))
+    multiplier = float(clipped["min_time_to_move_multiplier"])
+    clipped["max_action_delta"] = bounded
+    clipped["max_command_lead"] = [value * multiplier for value in bounded]
+
+
+def assert_shadow_only(
+    robot_config: dict[str, Any],
+    execute: bool,
+    *,
+    supervised_bounded_test: bool = False,
+) -> None:
     """Fail closed until action semantics and workspace limits are certified."""
     if not execute:
+        return
+    if supervised_bounded_test:
+        configure_supervised_bounded_test(robot_config)
         return
     contract = robot_config.get("action_contract", {})
     workspace = robot_config.get("safety", {}).get("workspace_limits")
@@ -425,6 +468,8 @@ def main() -> None:
         args.execute_clipped_step = True
         if args.max_steps is None:
             args.max_steps = int(config["evaluation"]["max_rollout_steps"])
+    if args.supervised_bounded_test and not args.execute_policy:
+        raise SystemExit("--supervised-bounded-test requires --execute-policy")
     if args.camera_backend == "realsense-sdk":
         configured_cameras = robot_config["cameras"]
         args.cam_main_serial = args.cam_main_serial or str(
@@ -443,6 +488,7 @@ def main() -> None:
     assert_shadow_only(
         robot_config,
         args.execute or args.execute_clipped_step or args.execute_policy,
+        supervised_bounded_test=args.supervised_bounded_test,
     )
     if args.execute_clipped_step:
         if not args.execute_home:
