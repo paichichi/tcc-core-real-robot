@@ -30,8 +30,10 @@ train = [
   "torchvision>=0.19",
 ]
 eval = [
+  "av>=13.1",
   "numpy>=1.26",
   "opencv-python>=4.10",
+  "pyarrow>=17.0",
   "torch>=2.4",
   "torchvision>=0.19",
 ]

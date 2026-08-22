@@ -4,7 +4,10 @@ cd ~/tcc-core-real-robot
 source .venv/bin/activate
 
 
-python scripts/eval_demo_first_frames.py --config configs/experiment_v8_hrp_official_single_view_60.yaml --backbone ours_rn50 --demonstrations 100 --task carrot --episodes 20 --tcc-source-root /home/robotarm/TCC-core --offline --gmm-inference highest-probability-mode
+hf download UoA-Trossen-Arm/pick_and_place_4_object_diverse --repo-type dataset --revision 6ce893dc73fc6310ccbd46786f71a03a5b6a3da2 --local-dir datasets/pick_and_place_4_object_diverse
 
 
-python scripts/eval_demo_first_frames.py --config configs/experiment_v8_hrp_official_single_view_60.yaml --backbone d4r_imagenet --demonstrations 100 --task carrot --episodes 20 --tcc-source-root /home/robotarm/TCC-core --offline --gmm-inference highest-probability-mode
+test -f datasets/pick_and_place_4_object_diverse/pick_and_place_carrot_100/meta/episodes.jsonl && echo DATASET_READY || echo DATASET_INCOMPLETE
+
+
+find datasets/pick_and_place_4_object_diverse -type f | wc -l
