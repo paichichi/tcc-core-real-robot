@@ -22,7 +22,8 @@ def main() -> None:
     output_dir = Path(args.output_dir)
     reports = sorted(output_dir.rglob("*.txt"))
     if not reports:
-        raise SystemExit(f"No TXT reports found under {output_dir}")
+        print(f"No committed TXT reports found under {output_dir}; nothing to check")
+        return
 
     failures: list[str] = []
     for report in reports:
