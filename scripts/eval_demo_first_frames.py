@@ -35,6 +35,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hub-cache-dir", type=Path)
     parser.add_argument("--offline", action="store_true")
     parser.add_argument("--device", default="auto")
+    parser.add_argument(
+        "--gmm-inference",
+        choices=("checkpoint", "highest-probability-mode"),
+        default="highest-probability-mode",
+        help="Use deterministic highest-probability HRP mode by default.",
+    )
     parser.add_argument("--output-dir", type=Path, default=Path("outputs"))
     return parser.parse_args()
 
@@ -80,15 +86,35 @@ def main() -> None:
     task_names = [str(value) for value in config["dataset"]["tasks"]]
     task_index, task_name = resolve_task(args.task, task_names)
     split = config["split"]
+    if all(
+        key in split
+        for key in (
+            "train_episodes_per_task",
+            "validation_episodes_per_task",
+            "test_episodes_per_task",
+        )
+    ):
+        split_sizes = (
+            int(split["train_episodes_per_task"]),
+            int(split["validation_episodes_per_task"]),
+            int(split["test_episodes_per_task"]),
+        )
+        shuffle_episodes = True
+    elif split.get("protocol") == "hrp_fixed_transition_holdout":
+        split_sizes = (
+            int(config["dataset"]["demonstrations_per_task"]),
+            0,
+            0,
+        )
+        shuffle_episodes = False
+    else:
+        raise ValueError(f"Unsupported episode selection protocol: {split}")
     records = build_episode_records(
         dataset_root,
         task_names,
         int(config["seed"]),
-        (
-            int(split["train_episodes_per_task"]),
-            int(split["validation_episodes_per_task"]),
-            int(split["test_episodes_per_task"]),
-        ),
+        split_sizes,
+        shuffle=shuffle_episodes,
     )
     selected = [
         record
@@ -105,6 +131,7 @@ def main() -> None:
         load_policy_bundle,
         predict_action,
         resolve_device,
+        restore_policy_backbone,
     )
     from tcc_real_robot.tcc_backbone import load_frozen_tcc_backbone
 
@@ -124,6 +151,7 @@ def main() -> None:
         expected_feature_dim=int(backbone_metadata["feature_dim"]),
         device=device,
     )
+    fine_tuned_backbone_restored = restore_policy_backbone(backbone, bundle)
     trained_tasks = [str(value) for value in bundle.config["dataset"]["tasks"]]
     if trained_tasks != task_names:
         raise RuntimeError("Checkpoint and current config use different task ordering")
@@ -137,7 +165,11 @@ def main() -> None:
         target = np.asarray(table["action"][0].as_py(), dtype=np.float64)
         state = np.asarray(table["observation.state"][0].as_py(), dtype=np.float64)
         cam_main = first_rgb_frame(record.video_path("cam_main"))
-        cam_wrist = first_rgb_frame(record.video_path("cam_wrist"))
+        cam_wrist = (
+            first_rgb_frame(record.video_path("cam_wrist"))
+            if "cam_wrist" in bundle.model.camera_names
+            else cam_main
+        )
         prediction = (
             predict_action(
                 backbone,
@@ -149,6 +181,11 @@ def main() -> None:
                 device,
                 observation_state=state,
                 episode_progress=0.0,
+                gmm_inference_override=(
+                    None
+                    if args.gmm_inference == "checkpoint"
+                    else args.gmm_inference
+                ),
             )
             .numpy()
             .astype(np.float64)
@@ -201,6 +238,11 @@ def main() -> None:
         report.write(f"Training episodes checked: {len(rows)}\n")
         report.write(f"Hub revision: {assets.revision}\n")
         report.write(f"Policy SHA256: {assets.policy_sha256}\n")
+        report.write(
+            "Fine-tuned backbone restored: "
+            f"{'YES' if fine_tuned_backbone_restored else 'NO'}\n"
+        )
+        report.write(f"GMM inference override: {args.gmm_inference}\n")
         report.write(f"Device: {device}\n\n")
         for row in rows:
             comparison = row["comparison"]
