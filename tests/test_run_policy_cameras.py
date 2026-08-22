@@ -90,6 +90,19 @@ def test_joint_position_driver_contract_matches_collection_api() -> None:
         module.validate_joint_position_driver_contract(experiment, robot)
 
 
+def test_all_actuation_modes_obey_shadow_release_gate() -> None:
+    module = load_run_policy()
+    robot = {
+        "action_contract": {"enabled": False},
+        "safety": {"workspace_limits": "CALIBRATING"},
+    }
+
+    with pytest.raises(RuntimeError, match="Run shadow evaluation first"):
+        module.assert_shadow_only(robot, True)
+
+    module.assert_shadow_only(robot, False)
+
+
 class FakeCapture:
     def __init__(self, grabs: list[bool]) -> None:
         self.grabs = iter(grabs)

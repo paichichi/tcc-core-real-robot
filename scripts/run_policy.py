@@ -420,7 +420,10 @@ def main() -> None:
         raise SystemExit(
             "--camera-backend v4l2 requires --cam-main and --cam-wrist"
         )
-    assert_shadow_only(robot_config, args.execute)
+    assert_shadow_only(
+        robot_config,
+        args.execute or args.execute_clipped_step or args.execute_policy,
+    )
     if args.execute_clipped_step:
         if not args.execute_home:
             raise SystemExit("--execute-clipped-step requires --execute-home")
