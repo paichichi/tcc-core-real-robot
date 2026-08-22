@@ -1,6 +1,6 @@
-/home/paichichi/miniconda3/envs/tcc-real-robot-hrp-py310/bin/python scripts/cache_hrp_images.py --config configs/experiment_v8_hrp_official_single_view_60.yaml --dataset-root /home/paichichi/data/tcc-core-real-robot/pick_and_place_4_object_diverse --output runs/hrp_image_buffer_carrot_hrp_official.sqlite3 --overwrite
+/home/paichichi/miniconda3/envs/tcc-real-robot-hrp-py310/bin/python scripts/cache_hrp_images.py --config configs/experiment_v8_hrp_official_single_view_60.yaml --dataset-root /home/paichichi/data/tcc-core-real-robot/pick_and_place_4_object_diverse --output runs/hrp_image_buffer_carrot_joint_position.sqlite3 --overwrite
 
 
 for backbone in ours_rn50 ours_vit r3m_unadapted d4r_imagenet; do
-  /home/paichichi/miniconda3/envs/tcc-real-robot-hrp-py310/bin/python scripts/train_hrp_end_to_end.py --config configs/experiment_v8_hrp_official_single_view_60.yaml --image-buffer runs/hrp_image_buffer_carrot_hrp_official.sqlite3 --backbone "$backbone" --tcc-source-root /home/paichichi/projects/TCC-core --output-dir "runs/tcc_mlp_bc_v8_hrp_cartesian_velocity/$backbone/hrp_official" --device auto
+  /home/paichichi/miniconda3/envs/tcc-real-robot-hrp-py310/bin/python scripts/train_hrp_end_to_end.py --config configs/experiment_v8_hrp_official_single_view_60.yaml --image-buffer runs/hrp_image_buffer_carrot_joint_position.sqlite3 --backbone "$backbone" --tcc-source-root /home/paichichi/projects/TCC-core --output-dir "runs/tcc_mlp_bc_v8_hrp_joint_position/$backbone/hrp_official_action_norm" --device auto
 done

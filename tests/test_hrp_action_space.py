@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from tcc_real_robot.hrp_action_space import (
     clip_hrp_action,
@@ -11,6 +12,15 @@ from tcc_real_robot.hrp_action_space import (
     measured_hrp_velocity,
     rotation_vector_to_matrix,
 )
+
+
+def test_velocity_bounds_reject_legacy_joint_position_limits() -> None:
+    with pytest.raises(ValueError, match="contain zero"):
+        clip_hrp_action(
+            np.zeros(7),
+            np.array([-0.6, 0.5, 0.5, -1.5, -0.2, -0.9, -0.001]),
+            np.array([0.6, 2.5, 2.3, 0.7, 0.5, 0.9, 0.04]),
+        )
 
 
 def test_rotation_vector_round_trip() -> None:

@@ -51,7 +51,13 @@ def validate_policy_contract(
         "proprioception",
         "proprioception_dim",
         "action_representation",
+        "action_adapter",
+        "action_space",
         "action_frame",
+        "state_representation",
+        "action_source",
+        "action_leads_measured_state_frames",
+        "driver_pose_representation",
         "rotation_velocity",
         "gripper_action",
         "action_distribution",
@@ -59,6 +65,7 @@ def validate_policy_contract(
         "normalize_state",
         "normalize_actions",
         "architecture",
+        "precision",
         "num_modes",
         "dropout",
         "progress_conditioning",
@@ -330,10 +337,19 @@ def predict_action(
     if "cam_wrist" in bundle.model.camera_names:
         frames.append(cam_wrist_rgb)
     images = preprocess_rgb_frames(frames, image_size, device=device)
+    policy_config = bundle.config["policy"]
+    strict_hrp_float32 = (
+        policy_config.get("architecture") == "hrp_state_token_gmm"
+        and policy_config.get("precision") == "float32"
+    )
+    if strict_hrp_float32 and device.type == "cuda":
+        torch.set_float32_matmul_precision("highest")
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = False
     with torch.autocast(
         device_type=device.type,
         dtype=torch.bfloat16,
-        enabled=device.type == "cuda",
+        enabled=device.type == "cuda" and not strict_hrp_float32,
     ):
         features = backbone(images).float()
         proprioception: torch.Tensor | None = None

@@ -153,3 +153,73 @@ class RealSenseColorCameras:
 
     def __exit__(self, *_: object) -> None:
         self.close()
+
+
+class RealSenseSingleColorCamera(RealSenseColorCameras):
+    """Expose one serial-pinned RGB stream through the existing pair interface.
+
+    The second returned array is an alias of the main frame and is ignored by a
+    cam_main-only policy. This keeps the rollout loop generic without starting
+    or depending on the unused wrist camera.
+    """
+
+    def __init__(
+        self,
+        rs: Any,
+        main_serial: str,
+        width: int,
+        height: int,
+        fps: int,
+        *,
+        timeout_ms: int = 3000,
+        read_attempts: int = 3,
+        minimum_channel_std: float = 2.0,
+        maximum_pair_skew_ms: float = 50.0,
+    ) -> None:
+        if not main_serial:
+            raise ValueError("A main RealSense serial number is required")
+        if min(width, height, fps, timeout_ms, read_attempts) <= 0:
+            raise ValueError("RealSense dimensions, rates, and retries must be positive")
+        if minimum_channel_std < 0 or maximum_pair_skew_ms <= 0:
+            raise ValueError("RealSense frame validation settings are invalid")
+        self.rs = rs
+        self.width = width
+        self.height = height
+        self.fps = fps
+        self.timeout_ms = timeout_ms
+        self.read_attempts = read_attempts
+        self.minimum_channel_std = minimum_channel_std
+        self.maximum_pair_skew_ms = maximum_pair_skew_ms
+        self.last_pair_skew_ms: float | None = None
+        self._executor = ThreadPoolExecutor(max_workers=1)
+        self.main_pipeline: Any | None = None
+        self.wrist_pipeline: Any | None = None
+        try:
+            self.main_pipeline, main_profile = self._start(main_serial)
+            self.main_properties = self._properties(main_profile)
+            self.wrist_properties = {"enabled": False, "reason": "policy_is_single_view"}
+        except Exception:
+            self.close()
+            raise
+
+    def read_rgb_pair(self) -> tuple[np.ndarray, np.ndarray]:
+        if self.main_pipeline is None:
+            raise RuntimeError("RealSense main pipeline is not running")
+        last_status = "no attempts made"
+        for attempt in range(1, self.read_attempts + 1):
+            main_rgb, _ = self._wait_rgb(self.main_pipeline)
+            expected_shape = (self.height, self.width, 3)
+            main_valid = (
+                main_rgb.shape == expected_shape
+                and main_rgb.dtype == np.uint8
+                and float(np.max(np.std(main_rgb, axis=(0, 1))))
+                >= self.minimum_channel_std
+            )
+            if main_valid:
+                self.last_pair_skew_ms = 0.0
+                return main_rgb, main_rgb
+            last_status = f"attempt={attempt}, main=INVALID"
+        raise RuntimeError(
+            "Failed to read a valid RealSense RGB frame after "
+            f"{self.read_attempts} attempts ({last_status})"
+        )

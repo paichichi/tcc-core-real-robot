@@ -30,7 +30,7 @@ def test_real_policy_preset_has_short_fixed_defaults(monkeypatch) -> None:
 
     assert args.task == "carrot"
     assert args.backbone == "ours_rn50"
-    assert args.demonstrations == 80
+    assert args.demonstrations is None
     assert args.camera_backend == "realsense-sdk"
     assert args.tcc_source_root == Path("/home/robotarm/TCC-core")
     assert args.offline is True
@@ -63,6 +63,31 @@ def test_home_anchor_preserves_later_live_policy_actions() -> None:
 
     assert applied is False
     assert action is raw_action
+
+
+def test_joint_position_driver_contract_matches_collection_api() -> None:
+    module = load_run_policy()
+    experiment = {
+        "observations": {"fps": 20},
+        "policy": {
+            "action_space": "joint_position",
+            "action_representation": "absolute",
+        },
+    }
+    robot = {
+        "hrp_driver_contract": {
+            "action_representation": "absolute",
+            "action_space": "joint_position",
+            "driver_call": "set_all_positions",
+            "ik_required": False,
+        },
+        "policy_evaluation": {"clipped_rollout": {"control_fps": 20}},
+    }
+
+    module.validate_joint_position_driver_contract(experiment, robot)
+    robot["hrp_driver_contract"]["driver_call"] = "set_cartesian_positions"
+    with pytest.raises(RuntimeError, match="Driver contract mismatch"):
+        module.validate_joint_position_driver_contract(experiment, robot)
 
 
 class FakeCapture:

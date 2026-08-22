@@ -108,6 +108,12 @@ def load_frozen_tcc_backbone(
             train_norm_affine=False,
             train_adapters=False,
         )
+        if not hasattr(backbone, "pooling"):
+            raise TypeError("MAE/HRP ViT backbone does not expose its pooling mode")
+        # HRP's released ViT downstream config is explicit: `use_cls: True`.
+        # TCC-trained ViTs retain their native patch-mean contract in the branch
+        # above; only raw D4R/HRP MAE releases use the CLS representation here.
+        backbone.pooling = "cls"
         source_format = "mae-vit-release"
         image_size = 224
     elif checkpoint.get("format") == "hralign-reproduction-v1":
@@ -160,6 +166,7 @@ def load_frozen_tcc_backbone(
         "feature_dim": int(backbone.output_dim),
         "image_size": image_size,
         "source_format": source_format,
+        "pooling": getattr(backbone, "pooling", "global_average"),
     }
     return backbone, metadata
 

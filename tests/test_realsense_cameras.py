@@ -5,7 +5,10 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from tcc_real_robot.realsense_cameras import RealSenseColorCameras
+from tcc_real_robot.realsense_cameras import (
+    RealSenseColorCameras,
+    RealSenseSingleColorCamera,
+)
 
 
 class FakeConfig:
@@ -137,3 +140,17 @@ def test_serial_pinned_cameras_request_only_rgb8_color() -> None:
 def test_serial_pinned_cameras_require_distinct_devices() -> None:
     with pytest.raises(ValueError, match="distinct"):
         RealSenseColorCameras(FakeRS(), "same", "same", 640, 480, 30)
+
+
+def test_single_view_camera_does_not_start_wrist_device() -> None:
+    rs = FakeRS()
+    with RealSenseSingleColorCamera(rs, "main", 640, 480, 30) as camera:
+        main, unused = camera.read_rgb_pair()
+
+        assert unused is main
+        assert camera.main_properties["serial"] == "main"
+        assert camera.wrist_properties["enabled"] is False
+        assert camera.last_pair_skew_ms == 0.0
+
+    assert len(rs.started_configs) == 1
+    assert rs.started_configs[0].serial == "main"

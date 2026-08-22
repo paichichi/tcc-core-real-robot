@@ -1,4 +1,4 @@
-"""The only robot-specific boundary in the HRP reproduction pipeline."""
+"""Experimental Cartesian adapter, isolated from the joint-position policy."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from tcc_real_robot.hrp_action_space import clip_hrp_action, hrp_state
 
 @dataclass(frozen=True)
 class HRPDriverStep:
-    """One clipped HRP velocity command sent through the official driver API."""
+    """One clipped Trossen-adapted HRP policy command."""
 
     raw_velocity: tuple[float, ...]
     commanded_velocity: tuple[float, ...]
@@ -21,7 +21,12 @@ class HRPDriverStep:
 
 
 class TrossenHRPDriverAdapter:
-    """Map official HRP actions onto Trossen Cartesian/gripper velocity calls."""
+    """Map our HRP-style policy output to Trossen Cartesian velocity calls.
+
+    HRP defines the network and behavior-cloning recipe; Cartesian velocity is
+    this repository's Trossen-specific action adapter. With Cartesian
+    interpolation, Trossen's driver performs differential IK internally.
+    """
 
     def __init__(
         self,
@@ -52,7 +57,7 @@ class TrossenHRPDriverAdapter:
         return hrp_state(pose, float(positions[6]))
 
     def start(self) -> None:
-        """Enter the velocity modes required by the official HRP action space."""
+        """Enter the velocity modes required by our Trossen action adapter."""
         self.driver.set_arm_modes(self.driver_api.Mode.velocity)
         self.driver.set_gripper_mode(self.driver_api.Mode.velocity)
         self.active = True
@@ -85,7 +90,7 @@ class TrossenHRPDriverAdapter:
         )
 
     def stop(self) -> None:
-        """Command zero velocity before the owning session returns to idle."""
+        """Command zero velocity and fail closed into idle modes."""
         if not self.active:
             return
         zeros = [0.0] * 6
@@ -100,4 +105,6 @@ class TrossenHRPDriverAdapter:
             goal_time=self.goal_time,
             blocking=False,
         )
+        self.driver.set_arm_modes(self.driver_api.Mode.idle)
+        self.driver.set_gripper_mode(self.driver_api.Mode.idle)
         self.active = False

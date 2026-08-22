@@ -23,11 +23,10 @@ def build_hrp_image_transform(
     training: bool,
     augmentation: Mapping[str, Any] | None = None,
 ) -> transforms.Compose:
-    """Build train/eval transforms with one shared inference contract.
+    """Build the official HRP ``medium`` train and ``preproc`` eval transforms.
 
-    Geometry-changing augmentation is deliberately small. Horizontal flips and
-    rotations are excluded because they would change the robot-frame meaning of
-    an action while leaving its label unchanged.
+    Horizontal flips and rotations stay excluded because they would change the
+    robot-frame meaning of an action while leaving its label unchanged.
     """
     if image_size <= 0:
         raise ValueError("image_size must be positive")
@@ -43,10 +42,10 @@ def build_hrp_image_transform(
                     settings, "random_resized_crop_scale", (0.9, 1.0)
                 ),
                 ratio=_pair(
-                    settings, "random_resized_crop_ratio", (0.95, 1.05)
+                    settings, "random_resized_crop_ratio", (3 / 4, 4 / 3)
                 ),
                 interpolation=InterpolationMode.BILINEAR,
-                antialias=True,
+                antialias=False,
             )
         )
 
@@ -75,7 +74,7 @@ def build_hrp_image_transform(
             operations.append(
                 transforms.RandomApply(
                     [transforms.GaussianBlur(kernel_size=kernel)],
-                    p=float(settings.get("gaussian_blur_probability", 0.2)),
+                    p=float(settings.get("gaussian_blur_probability", 1.0)),
                 )
             )
     else:
@@ -83,7 +82,7 @@ def build_hrp_image_transform(
             transforms.Resize(
                 (image_size, image_size),
                 interpolation=InterpolationMode.BILINEAR,
-                antialias=True,
+                antialias=False,
             )
         )
     operations.append(

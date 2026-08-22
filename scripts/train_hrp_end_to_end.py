@@ -18,6 +18,7 @@ from torch.utils.data import DataLoader, RandomSampler, Subset
 from tcc_real_robot.hrp_image_data import (
     HRPImageDataset,
     official_hrp_transition_split,
+    require_complete_joint_position_buffer,
 )
 from tcc_real_robot.hrp_vision import build_hrp_image_transform
 from tcc_real_robot.model_assets import resolve_backbone_asset
@@ -82,7 +83,7 @@ def save_checkpoint(
             "backbone_metadata": metadata,
             "config": config,
             "step": step,
-            "heldout_raw_gmm_nll": heldout_loss,
+            "heldout_normalized_gmm_nll": heldout_loss,
             "loss": "gmm_nll",
             "actuation_enabled": False,
         },
@@ -101,11 +102,13 @@ def evaluate(
     max_samples: int,
     *,
     train_backbone: bool,
-) -> tuple[float, float]:
+) -> tuple[float, float, float, float]:
     backbone.eval()
     model.eval()
     loss_total = 0.0
     error_total = 0.0
+    normalized_l2_total = 0.0
+    sign_disagreement_total = 0.0
     count = 0
     for images, states, actions, tasks in loader:
         remaining = max_samples - count
@@ -121,17 +124,30 @@ def evaluate(
         loss = model.negative_log_likelihood(
             target, features, None, tasks, normalized_state
         )
-        prediction = action_normalizer.denormalize(
-            model(features, None, tasks, normalized_state)
-        )
+        normalized_prediction = model(features, None, tasks, normalized_state)
+        prediction = action_normalizer.denormalize(normalized_prediction)
         batch_count = images.shape[0]
         loss_total += float(loss) * batch_count
         error_total += float(torch.abs(prediction - actions).mean()) * batch_count
+        normalized_l2_total += (
+            float(torch.square(normalized_prediction - target).mean()) * batch_count
+        )
+        sign_disagreement_total += (
+            float(
+                torch.logical_xor(target > 0, normalized_prediction > 0).float().mean()
+            )
+            * batch_count
+        )
         count += batch_count
     if train_backbone:
         backbone.train()
     model.train()
-    return loss_total / count, error_total / count
+    return (
+        loss_total / count,
+        normalized_l2_total / count,
+        sign_disagreement_total / count,
+        error_total / count,
+    )
 
 
 def main() -> None:
@@ -144,8 +160,35 @@ def main() -> None:
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
     policy_config = config["policy"]
+    require_complete_joint_position_buffer(
+        args.image_buffer,
+        dataset_revision=str(config["dataset"]["revision"]),
+        tasks=[str(task) for task in config["dataset"]["tasks"]],
+        episodes_per_task=int(config["dataset"]["demonstrations_per_task"]),
+        frames_per_episode=int(config["evaluation"]["max_rollout_steps"]),
+    )
+    required_action_contract = {
+        "action_representation": "absolute",
+        "action_space": "joint_position",
+        "action_adapter": "trossen_joint_position_passthrough",
+        "state_representation": "measured_joint_position",
+        "action_source": "original_lerobot_action",
+        "gripper_action": "position",
+    }
+    action_contract_mismatches = {
+        key: (policy_config.get(key), value)
+        for key, value in required_action_contract.items()
+        if policy_config.get(key) != value
+    }
+    if action_contract_mismatches:
+        raise ValueError(
+            "Training config is not the original joint-position contract: "
+            f"{action_contract_mismatches}"
+        )
     if policy_config["cameras"] != ["cam_main"]:
         raise ValueError("Official HRP reproduction requires cam_main only")
+    if policy_config.get("precision") != "float32":
+        raise ValueError("Official HRP reproduction requires float32 training")
     device = resolve_device(args.device)
     asset, _ = resolve_backbone_asset(
         config,
@@ -156,6 +199,10 @@ def main() -> None:
     backbone, metadata = load_trainable_tcc_backbone(
         asset, args.tcc_source_root, device
     )
+    if device.type == "cuda":
+        torch.set_float32_matmul_precision("highest")
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = False
     train_backbone = not args.freeze_backbone
     backbone.requires_grad_(train_backbone)
     backbone.train(train_backbone)
@@ -185,8 +232,17 @@ def main() -> None:
     heldout_data = Subset(all_eval_views, heldout_indices)
     identity_mean = torch.zeros(int(policy_config["action_dim"]))
     identity_std = torch.ones(int(policy_config["action_dim"]))
-    state_normalizer = ActionNormalizer(identity_mean, identity_std).to(device)
-    action_normalizer = ActionNormalizer(identity_mean, identity_std).to(device)
+    state_mean, state_std, action_mean, action_std = (
+        all_train_views.state_action_statistics(train_indices)
+    )
+    state_normalizer = ActionNormalizer(
+        state_mean if bool(policy_config["normalize_state"]) else identity_mean,
+        state_std if bool(policy_config["normalize_state"]) else identity_std,
+    ).to(device)
+    action_normalizer = ActionNormalizer(
+        action_mean if bool(policy_config["normalize_actions"]) else identity_mean,
+        action_std if bool(policy_config["normalize_actions"]) else identity_std,
+    ).to(device)
     model = HRPSingleViewGaussianMixturePolicy(
         feature_dim=int(metadata["feature_dim"]),
         action_dim=int(policy_config["action_dim"]),
@@ -257,34 +313,25 @@ def main() -> None:
         states = states.to(device, non_blocking=True)
         actions = actions.to(device, non_blocking=True)
         tasks = tasks.to(device, non_blocking=True)
-        with torch.autocast(
-            device_type=device.type,
-            dtype=torch.bfloat16,
-            enabled=device.type == "cuda",
-        ):
-            if train_backbone:
+        if train_backbone:
+            features = backbone(images).float()
+        else:
+            with torch.no_grad():
                 features = backbone(images).float()
-            else:
-                with torch.no_grad():
-                    features = backbone(images).float()
-            loss = model.negative_log_likelihood(
-                action_normalizer.normalize(actions),
-                features,
-                None,
-                tasks,
-                state_normalizer.normalize(states),
-            )
+        loss = model.negative_log_likelihood(
+            action_normalizer.normalize(actions),
+            features,
+            None,
+            tasks,
+            state_normalizer.normalize(states),
+        )
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
         optimizer.step()
         if step == 1 or step % 100 == 0:
-            print(
-                json.dumps(
-                    {"step": step, "train_gmm_nll": float(loss.detach())}
-                )
-            )
+            print(json.dumps({"step": step, "train_gmm_nll": float(loss.detach())}))
         if step % eval_every == 0 or step == iterations:
-            heldout_loss, heldout_mae = evaluate(
+            heldout_loss, heldout_l2, heldout_lsig, heldout_mae = evaluate(
                 backbone,
                 model,
                 heldout_loader,
@@ -296,8 +343,10 @@ def main() -> None:
             )
             row = {
                 "step": step,
-                "heldout_raw_gmm_nll": heldout_loss,
-                "heldout_velocity_mae": heldout_mae,
+                "heldout_normalized_gmm_nll": heldout_loss,
+                "heldout_normalized_action_l2": heldout_l2,
+                "heldout_normalized_sign_disagreement": heldout_lsig,
+                "heldout_joint_position_mae": heldout_mae,
             }
             history.append(row)
             print(json.dumps(row, sort_keys=True))
@@ -322,8 +371,8 @@ def main() -> None:
         "train_transitions": len(train_indices),
         "heldout_transitions": len(heldout_indices),
         "training_iterations": iterations,
-        "state_normalization": False,
-        "action_normalization": False,
+        "state_normalization": bool(policy_config["normalize_state"]),
+        "action_normalization": bool(policy_config["normalize_actions"]),
         "backbone_frozen": not train_backbone,
     }
     (output_dir / "metrics.json").write_text(json.dumps(metrics, indent=2) + "\n")

@@ -31,16 +31,32 @@ robot:
 
 action_contract:
   dimensions: 7
-  semantics: [vx, vy, vz, wx, wy, wz, gripper_velocity]
-  linear_units: m_s
-  angular_units: rad_s
-  gripper_units: driver_position_unit_s
-  frame: robot_base
-  dataset_pose: intrinsic_xyz_roll_pitch_yaw
-  driver_pose: angle_axis
-  mathematical_conversion: verified_on_35800_transitions
-  physical_actuation: UNVERIFIED
+  semantics: [joint_0_position, joint_1_position, joint_2_position, joint_3_position, joint_4_position, joint_5_position, gripper_position]
+  arm_units: rad
+  gripper_units: m
+  frame: joint
+  source: original_lerobot_action_column
+  driver_command: set_all_positions
+  ik_required: false
+  physical_actuation: VERIFIED_BY_359_FRAME_DEMO_REPLAY
   enabled: false
+
+# This matches the original LeRobot collector and the successful demo replay.
+# Learned-policy actuation remains fail-closed until the new checkpoint passes
+# shadow diagnostics and an explicitly supervised bounded rollout.
+hrp_driver_contract:
+  action_representation: absolute
+  action_space: joint_position
+  execution: bounded_joint_position_rollout
+  control_fps: 20.0
+  command_goal_time_s: 0.1
+  command_blocking: false
+  driver_call: set_all_positions
+  ik_required: false
+  limits_source: policy_evaluation.clipped_rollout.dataset_action_limits
+  recommended_firmware: "1.9.3"
+  current_validated_firmware: "1.9.2"
+  learned_policy_release: BLOCKED_PENDING_SHADOW_AND_SUPERVISED_TEST
 
 cameras:
   cam_main:
@@ -70,9 +86,10 @@ safety:
   require_emergency_stop_ready: true
   workspace_limits: CALIBRATING
   max_joint_delta_rad: 0.07
-  max_joint_velocity_rad_s: 1.5
+  # Dataset measured-state maxima are 2.747 rad/s and 0.0881 m/s at 20 Hz.
+  max_joint_velocity_rad_s: 2.8
   max_gripper_delta_m: 0.003
-  max_gripper_velocity_m_s: 0.06
+  max_gripper_velocity_m_s: 0.09
 
 policy_evaluation:
   camera_capture_fps: 30.0
@@ -86,29 +103,27 @@ policy_evaluation:
   # still recording the first raw prediction. Subsequent steps remain visual
   # closed-loop policy actions.
   force_first_action_home: true
-  # 0.25 at 20 Hz gives about a 0.17 s low-pass time constant. The filter is
-  # initialized from exact configured home and runs before the existing safety limiter.
-  action_ema_alpha: 0.25
+  # Preserve collection timing. alpha=1 leaves the policy target unchanged;
+  # Driver interpolation and all rollout limits remain active.
+  action_ema_alpha: 1.0
   clipped_rollout:
     # Permit an explicitly requested rollout beyond the 359-frame dataset
     # horizon for diagnostics. All action and tracking limits remain active.
     max_steps: 900
-    # Per-frame maxima measured from the successful 359-frame, 20 Hz replay
-    # of pick_and_place_carrot_100 episode 33. A uniform 0.02 rad cap limited
-    # the policy to about 0.4 rad/s, while the demonstration reaches 1.228
-    # rad/s on joint 3.
+    # Per-frame maxima across all 35,900 carrot frames. These preserve the
+    # demonstrated dynamics while rejecting targets outside dataset support.
     max_action_delta:
-      [0.02517738938331604, 0.041199326515197754, 0.046158552169799805, 0.06141754984855652, 0.036621651612222195, 0.06027315557003021, 0.0026736659929156303]
-    # Six 20 Hz command periods fit inside the official 0.3 s interpolation.
+      [0.04615854099392891, 0.060654640197753906, 0.08506894111633301, 0.13237200677394867, 0.0644693672657013, 0.08545053005218506, 0.004429406486451626]
+    # Two 20 Hz command periods match the collector's 0.1 s interpolation.
     # This caps how far the command stream may run ahead of measured motion.
     max_command_lead:
-      [0.15106433629989624, 0.24719595909118652, 0.27695131301879883, 0.3685052990913391, 0.21972990967333317, 0.3616389334201813, 0.016041995957493782]
+      [0.09231708198785782, 0.12130928039550781, 0.17013788223266602, 0.26474401354789734, 0.1289387345314026, 0.17090106010437012, 0.008858812972903252]
     dataset_action_limits:
       pick_and_place_carrot_100:
         min: [-0.6322957, 0.5960556, 0.5220493, -1.5905623, -0.2038987, -0.9504463, -0.0004923]
         max: [0.6002518, 2.5183108, 2.3691540, 0.6891356, 0.5243381, 0.8939880, 0.0404405]
     control_fps: 20.0
-    min_time_to_move_multiplier: 6.0
+    min_time_to_move_multiplier: 2.0
     command_blocking: false
     max_tracking_error:
       [0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.001]
@@ -116,7 +131,7 @@ policy_evaluation:
 demo_replay:
   start_goal_time_s: 5.0
   start_gripper_goal_time_s: 2.0
-  command_goal_time_s: 0.3
+  command_goal_time_s: 0.1
   max_tracking_error: [0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.001]
 
 workspace_calibration:

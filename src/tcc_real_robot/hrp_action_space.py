@@ -1,4 +1,4 @@
-"""HRP end-effector action semantics and the isolated Trossen adapter math."""
+"""Experimental Cartesian/IK math; not used by the joint-position policy."""
 
 from __future__ import annotations
 
@@ -144,6 +144,11 @@ def clip_hrp_action(
         or high.shape != (7,)
         or not np.isfinite(np.concatenate((velocity, low, high))).all()
         or np.any(low > high)
+        or np.any(low > 0.0)
+        or np.any(high < 0.0)
     ):
-        raise ValueError("HRP action and bounds must be finite ordered 7-D vectors")
+        raise ValueError(
+            "Velocity action bounds must be finite ordered 7-D vectors "
+            "that contain zero"
+        )
     return np.clip(velocity, low, high).astype(np.float32)

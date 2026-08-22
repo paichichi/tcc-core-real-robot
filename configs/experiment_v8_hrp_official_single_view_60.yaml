@@ -6,6 +6,12 @@ dataset:
   revision: 6ce893dc73fc6310ccbd46786f71a03a5b6a3da2
   local_root: datasets/pick_and_place_4_object_diverse
   demonstrations_per_task: 100
+  state_semantics: measured_joint_position_6_plus_gripper
+  action_semantics: commanded_joint_position_6_plus_gripper
+  action_source: original_lerobot_action_column
+  # Across all 100 episodes, action[t] is closest to measured state[t+2]. The
+  # target remains action[t]; this records the real controller response delay.
+  action_leads_measured_state_frames: 2
   tasks:
     - pick_and_place_carrot_100
 
@@ -25,17 +31,20 @@ backbone:
 
 model_hub:
   repository: Chipaipai/tcc-core-real-robot-policies
-  revision: e40f3fe4a459cc6cbbbf338d07cd651455978213
+  revision: dfbc7a76194d4aad41c06441dd2d7e4abce397cc
   backbone_manifest: backbones/manifest.json
-  policy_checkpoint_template: policies_v8_hrp_cartesian_velocity/{backbone}/hrp_official/checkpoint_150000.pt
-  policy_metrics_template: policies_v8_hrp_cartesian_velocity/{backbone}/hrp_official/metrics.json
+  policy_checkpoint_template: policies_v8_hrp_joint_position/{backbone}/hrp_official_action_norm/checkpoint_040000.pt
+  policy_metrics_template: policies_v8_hrp_joint_position/{backbone}/hrp_official_action_norm/metrics.json
   supported_backbones: [ours_rn50, ours_vit, r3m_unadapted, d4r_imagenet]
   supported_demonstrations: [100]
 
 policy:
-  implementation: tcc_mlp_bc_v8_hrp_cartesian_velocity
+  implementation: tcc_mlp_bc_v8_hrp_joint_position
   architecture: hrp_state_token_gmm
-  reference: data4robotics_hrp_release_default
+  # HRP specifies the visual/state-token MLP-GMM and BC recipe, while this
+  # Trossen adapter preserves the dataset's original joint-position contract.
+  architecture_reference: data4robotics_hrp_release_default
+  action_adapter: trossen_joint_position_passthrough
   cameras: [cam_main]
   shared_camera_backbone: false
   camera_fusion: raw_concat
@@ -49,12 +58,13 @@ policy:
   progress_dim: 0
   action_dim: 7
   action_chunk_size: 1
-  action_representation: cartesian_velocity
-  action_frame: robot_base
-  dataset_pose_representation: intrinsic_xyz_roll_pitch_yaw
-  driver_pose_representation: angle_axis
-  rotation_velocity: angle_axis_spatial
-  gripper_action: velocity
+  action_representation: absolute
+  action_space: joint_position
+  action_frame: joint
+  state_representation: measured_joint_position
+  action_source: original_lerobot_action
+  action_leads_measured_state_frames: 2
+  gripper_action: position
   action_distribution: gaussian_mixture
   num_modes: 5
   min_std: 0.0001
@@ -67,30 +77,29 @@ policy:
   input_layer_norm: false
   output_layer_scale: 1.0
   normalize_state: false
-  normalize_actions: false
+  normalize_actions: true
   optimizer: adam
   weight_decay: 0.0001
   loss: gmm_nll
-  training_steps: 150000
+  # First-stage real-robot budget: about 169 equivalent passes over the
+  # 35,400 training transitions. Extend only if 30K-40K metrics still improve.
+  training_steps: 40000
   batch_size: 150
   learning_rate: 0.0003
+  precision: float32
   num_workers: 10
   eval_every: 10000
   evaluation_samples: 500
 
 augmentation:
-  name: real_robot_domain_robust
+  # Exact data4robotics hrp_release `medium` transform. Torchvision's default
+  # RandomResizedCrop ratio is [3/4, 4/3]; GaussianBlur is applied every time.
+  name: hrp_release_medium
   random_resized_crop_scale: [0.9, 1.0]
-  # Preserve the 4:3 camera geometry while allowing mild crop/translation.
-  random_resized_crop_ratio: [1.20, 1.333333]
-  color_jitter:
-    brightness: 0.15
-    contrast: 0.15
-    saturation: 0.12
-    hue: 0.03
-  color_jitter_probability: 0.8
+  random_resized_crop_ratio: [0.75, 1.3333333333333333]
+  color_jitter_probability: 0.0
   gaussian_blur: true
-  gaussian_blur_probability: 0.2
+  gaussian_blur_probability: 1.0
   imagenet_normalization: true
 
 evaluation:

@@ -14,10 +14,11 @@ import numpy as np
 import pyarrow.parquet as pq
 import yaml
 
-from tcc_real_robot.hrp_action_space import (
-    dataset_euler_pose_to_hrp_pose,
-    hrp_state,
-    measured_hrp_velocity,
+from tcc_real_robot.hrp_image_data import (
+    JOINT_ACTION_SEMANTICS,
+    JOINT_STATE_SEMANTICS,
+    require_complete_joint_position_buffer,
+    validate_joint_position_manifest,
 )
 from tcc_real_robot.policy_data import build_episode_records
 
@@ -33,7 +34,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("runs/hrp_image_buffer_carrot_60.sqlite3"),
+        default=Path("runs/hrp_image_buffer_carrot_joint_position.sqlite3"),
     )
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--limit-episodes", type=int)
@@ -58,9 +59,7 @@ def initialize_database(connection: sqlite3.Connection) -> None:
         )
         """
     )
-    connection.execute(
-        "CREATE INDEX IF NOT EXISTS samples_split ON samples(split)"
-    )
+    connection.execute("CREATE INDEX IF NOT EXISTS samples_split ON samples(split)")
     connection.execute(
         "CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
     )
@@ -70,10 +69,14 @@ def main() -> None:
     args = parse_args()
     config = yaml.safe_load(args.config.read_text())
     dataset_root = (
-        args.dataset_root
-        if args.dataset_root is not None
-        else Path(config["dataset"]["local_root"])
-    ).expanduser().resolve()
+        (
+            args.dataset_root
+            if args.dataset_root is not None
+            else Path(config["dataset"]["local_root"])
+        )
+        .expanduser()
+        .resolve()
+    )
     output = args.output.expanduser().resolve()
     if args.overwrite and output.exists():
         output.unlink()
@@ -90,54 +93,48 @@ def main() -> None:
 
     with sqlite3.connect(output) as connection:
         initialize_database(connection)
+        existing_samples = int(
+            connection.execute("SELECT COUNT(*) FROM samples").fetchone()[0]
+        )
+        if existing_samples:
+            manifest_row = connection.execute(
+                "SELECT value FROM metadata WHERE key = 'manifest'"
+            ).fetchone()
+            if manifest_row is None:
+                raise RuntimeError(
+                    "Existing image buffer has samples but no manifest; rerun with "
+                    "--overwrite"
+                )
+            validate_joint_position_manifest(json.loads(str(manifest_row[0])))
         for number, record in enumerate(records, start=1):
             existing = connection.execute(
                 "SELECT COUNT(*) FROM samples WHERE task_index = ? AND episode_index = ?",
                 (record.task_index, record.episode_index),
             ).fetchone()
             if existing is not None and int(existing[0]) > 0:
-                print(f"[{number}/{len(records)}] cached {record.task_name}/{record.episode_index}")
+                print(
+                    f"[{number}/{len(records)}] cached {record.task_name}/{record.episode_index}"
+                )
                 continue
             table = pq.read_table(
                 record.parquet_path,
-                columns=[
-                    "observation.state",
-                    "observation.cartesian_position",
-                    "timestamp",
-                ],
+                columns=["observation.state", "action"],
             )
-            joint_states = np.asarray(
+            states = np.asarray(
                 table["observation.state"].to_pylist(), dtype=np.float32
             )
-            cartesian = np.asarray(
-                table["observation.cartesian_position"].to_pylist(),
-                dtype=np.float32,
-            )
-            timestamps = np.asarray(table["timestamp"].to_pylist(), dtype=np.float64)
-            if len(cartesian) != len(joint_states):
+            actions = np.asarray(table["action"].to_pylist(), dtype=np.float32)
+            if (
+                states.shape != actions.shape
+                or states.ndim != 2
+                or states.shape[1] != 7
+            ):
                 raise RuntimeError(
-                    f"Pose/state length mismatch in {record}: "
-                    f"{len(cartesian)} != {len(joint_states)}"
+                    f"Expected aligned [N, 7] state/action in {record}, got "
+                    f"{states.shape} and {actions.shape}"
                 )
-            states = np.stack(
-                [
-                    hrp_state(
-                        dataset_euler_pose_to_hrp_pose(pose),
-                        float(joints[6]),
-                    )
-                    for pose, joints in zip(cartesian, joint_states)
-                ]
-            )
-            actions = np.stack(
-                [
-                    measured_hrp_velocity(
-                        states[index],
-                        states[index + 1],
-                        float(timestamps[index + 1] - timestamps[index]),
-                    )
-                    for index in range(len(states) - 1)
-                ]
-            )
+            if not np.isfinite(states).all() or not np.isfinite(actions).all():
+                raise RuntimeError(f"Non-finite state/action in {record}")
             rows = []
             with av.open(str(record.video_path("cam_main"))) as container:
                 for frame_index, frame in enumerate(
@@ -145,7 +142,7 @@ def main() -> None:
                 ):
                     buffer = io.BytesIO()
                     frame.to_image().save(buffer, format="JPEG", quality=95)
-                    if frame_index >= len(actions):
+                    if frame_index >= len(states):
                         break
                     rows.append(
                         (
@@ -158,11 +155,10 @@ def main() -> None:
                             actions[frame_index].tobytes(),
                         )
                     )
-            if len(rows) != len(actions) or len(states) != len(actions) + 1:
+            if len(rows) != len(states):
                 raise RuntimeError(
                     f"Unsynchronized episode {record}: "
-                    f"transitions={len(rows)}, actions={len(actions)}, "
-                    f"states={len(states)}"
+                    f"video={len(rows)}, states={len(states)}, actions={len(actions)}"
                 )
             connection.executemany(
                 """
@@ -177,14 +173,25 @@ def main() -> None:
         manifest = {
             "dataset_revision": config["dataset"]["revision"],
             "config": str(args.config),
+            "tasks": list(config["dataset"]["tasks"]),
             "camera": "cam_main",
-            "source_pose_semantics": "dataset_xyz_plus_intrinsic_xyz_roll_pitch_yaw",
-            "state_semantics": "trossen_xyz_plus_angle_axis_plus_gripper_position",
-            "action_semantics": (
-                "trossen_base_frame_vx_vy_vz_wx_wy_wz_plus_gripper_velocity"
+            "state_semantics": JOINT_STATE_SEMANTICS,
+            "action_semantics": JOINT_ACTION_SEMANTICS,
+            "action_source": "original_lerobot_action_column",
+            "driver_command": "set_all_positions",
+            "action_leads_measured_state_frames": int(
+                config["dataset"]["action_leads_measured_state_frames"]
             ),
             "jpeg_quality": 95,
             "episodes": len(records),
+            "episodes_per_task": int(config["dataset"]["demonstrations_per_task"]),
+            "frames_per_episode": int(config["evaluation"]["max_rollout_steps"]),
+            "samples": sum(
+                int(row[0])
+                for row in connection.execute(
+                    "SELECT COUNT(*) FROM samples GROUP BY task_index, episode_index"
+                )
+            ),
             "split_protocol": config["split"],
             "actuation_enabled": False,
         }
@@ -193,6 +200,14 @@ def main() -> None:
             ("manifest", json.dumps(manifest, sort_keys=True)),
         )
         connection.commit()
+    if args.limit_episodes is None:
+        require_complete_joint_position_buffer(
+            output,
+            dataset_revision=str(config["dataset"]["revision"]),
+            tasks=[str(task) for task in config["dataset"]["tasks"]],
+            episodes_per_task=int(config["dataset"]["demonstrations_per_task"]),
+            frames_per_episode=int(config["evaluation"]["max_rollout_steps"]),
+        )
     print(output)
 
 

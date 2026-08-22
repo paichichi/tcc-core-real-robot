@@ -123,11 +123,11 @@ def make_config() -> dict:
             "clipped_rollout": {
                 "max_steps": 3,
                 "max_action_delta": [0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.001],
-                "max_command_lead": [0.06, 0.06, 0.06, 0.06, 0.06, 0.06, 0.003],
+                "max_command_lead": [0.04, 0.04, 0.04, 0.04, 0.04, 0.04, 0.002],
                 "max_cumulative_joint_delta_rad": 0.06,
                 "max_cumulative_gripper_delta_m": 0.003,
                 "control_fps": 20.0,
-                "min_time_to_move_multiplier": 6.0,
+                "min_time_to_move_multiplier": 2.0,
                 "command_blocking": False,
                 "max_tracking_error": [0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.001],
             },
@@ -180,7 +180,7 @@ def test_execute_bounded_policy_step_clips_then_tracks() -> None:
     assert result.max_commanded_arm_delta_rad == pytest.approx(0.02)
     assert result.commanded_gripper_delta_m == pytest.approx(0.001)
     assert result.observed == pytest.approx(result.commanded)
-    assert driver.all_commands[-1][1:] == pytest.approx((0.3, False))
+    assert driver.all_commands[-1][1:] == pytest.approx((0.1, False))
     assert result.max_arm_command_gap_rad == pytest.approx(0.0)
     assert result.gripper_command_gap_m == pytest.approx(0.0)
     session.close()
@@ -239,17 +239,13 @@ def test_bounded_policy_commands_advance_while_measurement_lags() -> None:
 
     driver.set_all_positions = record_without_motion  # type: ignore[method-assign]
     results = [
-        session.execute_bounded_policy_step([3.0] * 7, reference)
-        for _ in range(4)
+        session.execute_bounded_policy_step([3.0] * 7, reference) for _ in range(4)
     ]
 
     assert [result.commanded[0] for result in results] == pytest.approx(
-        [0.02, 0.04, 0.06, 0.06]
+        [0.02, 0.04, 0.04, 0.04]
     )
-    assert all(
-        result.max_commanded_arm_delta_rad <= 0.02 + 1e-9
-        for result in results
-    )
+    assert all(result.max_commanded_arm_delta_rad <= 0.02 + 1e-9 for result in results)
     session.close()
 
 

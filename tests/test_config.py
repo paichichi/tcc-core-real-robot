@@ -14,6 +14,16 @@ def test_initial_revision_disables_actuation() -> None:
     assert config["robot"]["motor_parameters"] == "wxai_v0_20250509"
     assert config["robot"]["expected_driver_version"] == "1.9.3"
     assert config["robot"]["expected_firmware_version"] == "1.9.2"
+    hrp = config["hrp_driver_contract"]
+    assert hrp["execution"] == "bounded_joint_position_rollout"
+    assert hrp["action_representation"] == "absolute"
+    assert hrp["action_space"] == "joint_position"
+    assert hrp["driver_call"] == "set_all_positions"
+    assert hrp["ik_required"] is False
+    assert hrp["recommended_firmware"] == "1.9.3"
+    assert hrp["learned_policy_release"] == (
+        "BLOCKED_PENDING_SHADOW_AND_SUPERVISED_TEST"
+    )
     assert config["cameras"]["cam_main"]["serial_number"] == "838212073584"
     assert config["cameras"]["cam_main"]["asic_serial_number"] == "843213020438"
     assert config["cameras"]["cam_main"]["usb_serial"] == "UNAVAILABLE"
@@ -24,27 +34,27 @@ def test_initial_revision_disables_actuation() -> None:
     assert config["policy_evaluation"]["inference_warmup_steps"] >= 1
     assert config["policy_evaluation"]["minimum_observed_rate_hz"] == 18.0
     assert config["policy_evaluation"]["camera_capture_fps"] == 30.0
-    assert config["policy_evaluation"]["action_ema_alpha"] == 0.25
+    assert config["policy_evaluation"]["action_ema_alpha"] == 1.0
     assert config["policy_evaluation"]["force_first_action_home"] is True
     clipped = config["policy_evaluation"]["clipped_rollout"]
     assert clipped["max_steps"] == 900
     assert clipped["max_action_delta"] == [
-        0.02517738938331604,
-        0.041199326515197754,
-        0.046158552169799805,
-        0.06141754984855652,
-        0.036621651612222195,
-        0.06027315557003021,
-        0.0026736659929156303,
+        0.04615854099392891,
+        0.060654640197753906,
+        0.08506894111633301,
+        0.13237200677394867,
+        0.0644693672657013,
+        0.08545053005218506,
+        0.004429406486451626,
     ]
     assert clipped["max_command_lead"] == [
-        0.15106433629989624,
-        0.24719595909118652,
-        0.27695131301879883,
-        0.3685052990913391,
-        0.21972990967333317,
-        0.3616389334201813,
-        0.016041995957493782,
+        0.09231708198785782,
+        0.12130928039550781,
+        0.17013788223266602,
+        0.26474401354789734,
+        0.1289387345314026,
+        0.17090106010437012,
+        0.008858812972903252,
     ]
     assert clipped["max_command_lead"] == [
         value * clipped["min_time_to_move_multiplier"]
@@ -60,7 +70,7 @@ def test_initial_revision_disables_actuation() -> None:
         0.001,
     ]
     assert clipped["control_fps"] == 20.0
-    assert clipped["min_time_to_move_multiplier"] == 6.0
+    assert clipped["min_time_to_move_multiplier"] == 2.0
     assert clipped["command_blocking"] is False
     assert "max_cumulative_joint_delta_rad" not in clipped
     assert "max_cumulative_gripper_delta_m" not in clipped
@@ -168,9 +178,7 @@ def test_r3m_reference_policy_configuration() -> None:
 
 
 def test_r3m_multiview_proprio_policy_configuration() -> None:
-    config = load_yaml(
-        ROOT / "configs" / "experiment_r3m_multiview_proprio_60.yaml"
-    )
+    config = load_yaml(ROOT / "configs" / "experiment_r3m_multiview_proprio_60.yaml")
     policy = config["policy"]
     assert policy["implementation"] == "tcc_mlp_bc_v5_r3m_multiview_proprio"
     assert policy["cameras"] == ["cam_main", "cam_wrist"]
@@ -186,9 +194,7 @@ def test_r3m_multiview_proprio_policy_configuration() -> None:
 
 
 def test_r3m_single_view_proprio_policy_configuration() -> None:
-    config = load_yaml(
-        ROOT / "configs" / "experiment_r3m_single_view_proprio_60.yaml"
-    )
+    config = load_yaml(ROOT / "configs" / "experiment_r3m_single_view_proprio_60.yaml")
     policy = config["policy"]
     assert policy["implementation"] == "tcc_mlp_bc_v5_r3m_single_view_proprio"
     assert policy["cameras"] == ["cam_main"]
@@ -320,24 +326,32 @@ def test_v8_matches_hrp_release_single_view_defaults() -> None:
     assert config["backbone"]["frozen"] is False
     assert config["backbone"]["fine_tuning"] == "full_end_to_end"
     assert config["dataset"]["tasks"] == ["pick_and_place_carrot_100"]
+    assert config["dataset"]["demonstrations_per_task"] == 100
+    assert config["dataset"]["action_leads_measured_state_frames"] == 2
     assert policy["architecture"] == "hrp_state_token_gmm"
+    assert policy["architecture_reference"] == "data4robotics_hrp_release_default"
+    assert policy["action_adapter"] == "trossen_joint_position_passthrough"
     assert policy["cameras"] == ["cam_main"]
     assert policy["task_conditioning"] is None
     assert policy["number_of_tasks"] == 1
-    assert policy["dataset_pose_representation"] == "intrinsic_xyz_roll_pitch_yaw"
-    assert policy["driver_pose_representation"] == "angle_axis"
-    assert policy["action_frame"] == "robot_base"
-    assert policy["rotation_velocity"] == "angle_axis_spatial"
+    assert policy["action_representation"] == "absolute"
+    assert policy["action_space"] == "joint_position"
+    assert policy["state_representation"] == "measured_joint_position"
+    assert policy["action_source"] == "original_lerobot_action"
+    assert policy["action_leads_measured_state_frames"] == 2
+    assert policy["action_frame"] == "joint"
+    assert policy["gripper_action"] == "position"
     assert policy["action_distribution"] == "gaussian_mixture"
     assert policy["num_modes"] == 5
     assert policy["hidden_dimensions"] == [512, 512]
     assert policy["dropout"] == 0.2
-    assert policy["training_steps"] == 150000
+    assert policy["training_steps"] == 40000
     assert policy["batch_size"] == 150
     assert policy["learning_rate"] == 0.0003
+    assert policy["precision"] == "float32"
     assert policy["weight_decay"] == 0.0001
     assert policy["normalize_state"] is False
-    assert policy["normalize_actions"] is False
+    assert policy["normalize_actions"] is True
     assert policy["inference"] == "official_zero_std_mixture_sample"
     assert config["split"] == {
         "protocol": "hrp_fixed_transition_holdout",
@@ -345,3 +359,15 @@ def test_v8_matches_hrp_release_single_view_defaults() -> None:
         "held_out_transitions": 500,
     }
     assert config["model_hub"]["supported_demonstrations"] == [100]
+    assert config["model_hub"]["revision"] == (
+        "dfbc7a76194d4aad41c06441dd2d7e4abce397cc"
+    )
+    assert config["augmentation"] == {
+        "name": "hrp_release_medium",
+        "random_resized_crop_scale": [0.9, 1.0],
+        "random_resized_crop_ratio": [0.75, 4 / 3],
+        "color_jitter_probability": 0.0,
+        "gaussian_blur": True,
+        "gaussian_blur_probability": 1.0,
+        "imagenet_normalization": True,
+    }

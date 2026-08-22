@@ -233,9 +233,14 @@ class PolicyHomeSession:
                 len(absolute_min) != 7
                 or len(absolute_max) != 7
                 or not all(isfinite(value) for value in (*absolute_min, *absolute_max))
-                or any(low > high for low, high in zip(absolute_min, absolute_max, strict=True))
+                or any(
+                    low > high
+                    for low, high in zip(absolute_min, absolute_max, strict=True)
+                )
             ):
-                raise ValueError("Absolute action bounds must be seven finite ordered pairs")
+                raise ValueError(
+                    "Absolute action bounds must be seven finite ordered pairs"
+                )
 
         settings = self.config["policy_evaluation"]["clipped_rollout"]
         max_action_delta = [float(value) for value in settings["max_action_delta"]]
@@ -247,14 +252,11 @@ class PolicyHomeSession:
             settings.get("max_cumulative_gripper_delta_m", float("inf"))
         )
         control_fps = float(settings["control_fps"])
-        min_time_to_move_multiplier = float(
-            settings["min_time_to_move_multiplier"]
-        )
+        min_time_to_move_multiplier = float(settings["min_time_to_move_multiplier"])
         command_blocking = settings["command_blocking"]
         goal_time = min_time_to_move_multiplier / control_fps
-        max_tracking_error = [
-            float(value) for value in settings["max_tracking_error"]
-        ]
+        control_period = 1.0 / control_fps
+        max_tracking_error = [float(value) for value in settings["max_tracking_error"]]
         if (
             len(max_action_delta) != 7
             or any(value <= 0 for value in max_action_delta)
@@ -272,7 +274,7 @@ class PolicyHomeSession:
             )
             or control_fps <= 0
             or min_time_to_move_multiplier <= 0
-            or goal_time <= 0.2
+            or goal_time + 1e-12 < control_period
             or command_blocking is not False
         ):
             raise ValueError("Clipped single-step limits and goal time are invalid")
@@ -370,10 +372,8 @@ class PolicyHomeSession:
         goal_time = float(settings["min_time_to_move_multiplier"]) / float(
             settings["control_fps"]
         )
-        max_tracking_error = [
-            float(value) for value in settings["max_tracking_error"]
-        ]
-        if goal_time <= 0.2 or len(max_tracking_error) != 7:
+        max_tracking_error = [float(value) for value in settings["max_tracking_error"]]
+        if goal_time <= 0.0 or len(max_tracking_error) != 7:
             raise ValueError("Final policy verification settings are invalid")
         time.sleep(goal_time)
         observed = self.read_positions()

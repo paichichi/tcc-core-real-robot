@@ -24,14 +24,18 @@ from tcc_real_robot.model_assets import (
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Evaluate a pinned backbone-policy pair from two RGB cameras with "
+            "Evaluate a pinned backbone-policy pair from its configured RGB cameras with "
             "shadow mode or explicitly gated, bounded real-robot rollout."
         )
     )
     parser.add_argument("--config", type=Path, default=Path("configs/experiment.yaml"))
     parser.add_argument("--robot-config", type=Path, default=Path("configs/robot.yaml"))
     parser.add_argument("--backbone", default="ours_rn50")
-    parser.add_argument("--demonstrations", type=int, default=80)
+    parser.add_argument(
+        "--demonstrations",
+        type=int,
+        help="Defaults to dataset.demonstrations_per_task from the config.",
+    )
     parser.add_argument(
         "--policy-checkpoint",
         type=Path,
@@ -340,10 +344,40 @@ def assert_shadow_only(robot_config: dict[str, Any], execute: bool) -> None:
     raise RuntimeError(f"Refusing --execute: {detail}. Run shadow evaluation first.")
 
 
+def validate_joint_position_driver_contract(
+    experiment_config: dict[str, Any], robot_config: dict[str, Any]
+) -> None:
+    """Prove the current policy output reaches the collection-time driver API."""
+    policy = experiment_config["policy"]
+    if policy.get("action_space") != "joint_position":
+        return
+    driver = robot_config["hrp_driver_contract"]
+    expected = {
+        "action_representation": "absolute",
+        "action_space": "joint_position",
+        "driver_call": "set_all_positions",
+        "ik_required": False,
+    }
+    mismatches = {
+        key: (driver.get(key), value)
+        for key, value in expected.items()
+        if driver.get(key) != value
+    }
+    if policy.get("action_representation") != "absolute":
+        mismatches["policy.action_representation"] = (
+            policy.get("action_representation"),
+            "absolute",
+        )
+    control_fps = float(robot_config["policy_evaluation"]["clipped_rollout"]["control_fps"])
+    observation_fps = float(experiment_config["observations"]["fps"])
+    if control_fps != observation_fps:
+        mismatches["control_fps"] = (control_fps, observation_fps)
+    if mismatches:
+        raise RuntimeError(f"Joint-position Driver contract mismatch: {mismatches}")
+
+
 def main() -> None:
     args = parse_args()
-    if args.demonstrations <= 0:
-        raise SystemExit("--demonstrations must be positive")
     if args.warmup_frames < 0:
         raise SystemExit("--warmup-frames must be non-negative")
     if args.camera_startup_delay < 0:
@@ -360,6 +394,12 @@ def main() -> None:
         raise SystemExit("--controller-timeout must be positive")
     config = load_yaml(args.config)
     robot_config = load_yaml(args.robot_config)
+    validate_joint_position_driver_contract(config, robot_config)
+    if args.demonstrations is None:
+        args.demonstrations = int(config["dataset"]["demonstrations_per_task"])
+    if args.demonstrations <= 0:
+        raise SystemExit("--demonstrations must be positive")
+    uses_wrist_camera = "cam_wrist" in config["policy"]["cameras"]
     if args.execute_policy:
         args.execute_home = True
         args.execute_clipped_step = True
@@ -370,10 +410,11 @@ def main() -> None:
         args.cam_main_serial = args.cam_main_serial or str(
             configured_cameras["cam_main"]["serial_number"]
         )
-        args.cam_wrist_serial = args.cam_wrist_serial or str(
-            configured_cameras["cam_wrist"]["serial_number"]
-        )
-        if args.cam_main_serial == args.cam_wrist_serial:
+        if uses_wrist_camera:
+            args.cam_wrist_serial = args.cam_wrist_serial or str(
+                configured_cameras["cam_wrist"]["serial_number"]
+            )
+        if uses_wrist_camera and args.cam_main_serial == args.cam_wrist_serial:
             raise SystemExit("Main and wrist RealSense serials must be distinct")
     elif not args.cam_main or not args.cam_wrist:
         raise SystemExit(
@@ -605,7 +646,10 @@ def main() -> None:
         report.write(f"Camera read mode: {args.camera_read_mode}\n")
         if args.camera_backend == "realsense-sdk":
             report.write(f"Camera main serial: {args.cam_main_serial}\n")
-            report.write(f"Camera wrist serial: {args.cam_wrist_serial}\n")
+            if uses_wrist_camera:
+                report.write(f"Camera wrist serial: {args.cam_wrist_serial}\n")
+            else:
+                report.write("Camera wrist: DISABLED (single-view checkpoint)\n")
         else:
             report.write(f"Camera main: {args.cam_main}\n")
             report.write(f"Camera wrist: {args.cam_wrist}\n")
@@ -705,16 +749,28 @@ def main() -> None:
                         "pyrealsense2 is required for --camera-backend "
                         "realsense-sdk; install the robot extras"
                     ) from exc
-                from tcc_real_robot.realsense_cameras import RealSenseColorCameras
+                from tcc_real_robot.realsense_cameras import (
+                    RealSenseColorCameras,
+                    RealSenseSingleColorCamera,
+                )
 
                 if not camera_capture_fps.is_integer():
                     raise RuntimeError(
                         "RealSense SDK capture FPS must be a whole number"
                     )
-                camera_context: Any = RealSenseColorCameras(
+                camera_type = (
+                    RealSenseColorCameras
+                    if "cam_wrist" in bundle.model.camera_names
+                    else RealSenseSingleColorCamera
+                )
+                camera_serials = (
+                    (args.cam_main_serial, args.cam_wrist_serial)
+                    if "cam_wrist" in bundle.model.camera_names
+                    else (args.cam_main_serial,)
+                )
+                camera_context: Any = camera_type(
                     rs,
-                    args.cam_main_serial,
-                    args.cam_wrist_serial,
+                    *camera_serials,
                     width,
                     height,
                     int(camera_capture_fps),

@@ -37,9 +37,9 @@ class FakeDriver:
         return "No error"
 
 
-def test_adapter_is_a_thin_official_velocity_driver_boundary() -> None:
+def test_adapter_is_a_thin_trossen_velocity_driver_boundary() -> None:
     api = SimpleNamespace(
-        Mode=SimpleNamespace(velocity="velocity"),
+        Mode=SimpleNamespace(velocity="velocity", idle="idle"),
         InterpolationSpace=SimpleNamespace(cartesian="cartesian"),
     )
     driver = FakeDriver()
@@ -69,3 +69,5 @@ def test_adapter_is_a_thin_official_velocity_driver_boundary() -> None:
     adapter.stop()
     assert driver.cartesian_commands[-1][0] == [0.0] * 6
     assert driver.gripper_commands[-1][0] == 0.0
+    assert driver.arm_mode == "idle"
+    assert driver.gripper_mode == "idle"
