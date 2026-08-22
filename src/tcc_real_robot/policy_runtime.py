@@ -225,19 +225,31 @@ def load_policy_bundle(
     if int(policy_config.get("progress_dim", progress_dim)) != progress_dim:
         raise ValueError("Checkpoint progress_dim disagrees with progress_conditioning")
     architecture = str(policy_config.get("architecture", "pooled_feature_mlp"))
-    if architecture == "r3m_deterministic_mlp_dual_independent_encoder":
+    r3m_architectures = {
+        "r3m_deterministic_mlp_dual_independent_encoder": False,
+        "r3m_deterministic_mlp_dual_independent_encoder_proprio": True,
+    }
+    if architecture in r3m_architectures:
+        expected_proprioception = r3m_architectures[architecture]
         if (
             camera_names != ("cam_main", "cam_wrist")
-            or uses_proprioception
+            or uses_proprioception is not expected_proprioception
             or progress_dim
             or camera_fusion != "raw_concat"
         ):
-            raise ValueError("Minimal R3M policy requires two raw camera features")
+            raise ValueError(
+                "R3M policy requires two raw camera features and matching "
+                "proprioception metadata"
+            )
         model = R3MRobomimicPolicy(
             feature_dim=feature_dim,
             action_dim=int(policy_config["action_dim"]),
             hidden_dims=tuple(policy_config["hidden_dimensions"]),
             output_layer_scale=float(policy_config.get("output_layer_scale", 0.01)),
+            proprio_dim=proprio_dim,
+            proprio_dropout=float(
+                policy_config.get("proprioception_dropout", 0.0)
+            ),
         )
     else:
         action_distribution = str(
@@ -409,7 +421,7 @@ def predict_action(
             if cam_wrist_features is None:
                 raise RuntimeError("R3M multi-view policy requires cam_wrist")
             normalized_action = bundle.model(
-                cam_main_features, cam_wrist_features
+                cam_main_features, cam_wrist_features, normalized_state
             )
         else:
             normalized_action = bundle.model(

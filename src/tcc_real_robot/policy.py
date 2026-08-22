@@ -27,13 +27,12 @@ class ActionNormalizer(nn.Module):
 
 
 class R3MRobomimicPolicy(nn.Module):
-    """Minimal R3M MLP over two independently encoded camera observations."""
+    """R3M MLP over two independent camera encoders and optional robot state."""
 
     camera_names = ("cam_main", "cam_wrist")
     camera_fusion = "raw_concat"
     camera_projection_dim = 0
     camera_gate_hidden_dim = 0
-    proprio_dim = 0
     progress_dim = 0
 
     def __init__(
@@ -42,6 +41,8 @@ class R3MRobomimicPolicy(nn.Module):
         action_dim: int = 7,
         hidden_dims: Sequence[int] = (256, 256),
         output_layer_scale: float = 0.01,
+        proprio_dim: int = 0,
+        proprio_dropout: float = 0.0,
     ) -> None:
         super().__init__()
         if feature_dim < 1 or action_dim < 1:
@@ -50,10 +51,19 @@ class R3MRobomimicPolicy(nn.Module):
             raise ValueError("R3M MLP requires positive hidden dimensions")
         if output_layer_scale <= 0:
             raise ValueError("Output-layer scale must be positive")
+        if proprio_dim < 0:
+            raise ValueError("Proprioception dimension cannot be negative")
+        if not 0.0 <= proprio_dropout < 1.0:
+            raise ValueError("Proprioception dropout must be in [0, 1)")
+        if proprio_dim == 0 and proprio_dropout:
+            raise ValueError("Proprioception dropout requires proprioception")
         self.feature_dim = feature_dim
         self.action_dim = action_dim
-        layers: list[nn.Module] = [nn.BatchNorm1d(2 * feature_dim)]
-        previous = 2 * feature_dim
+        self.proprio_dim = proprio_dim
+        self.proprio_dropout = nn.Dropout(proprio_dropout)
+        input_dim = 2 * feature_dim + proprio_dim
+        layers: list[nn.Module] = [nn.BatchNorm1d(input_dim)]
+        previous = input_dim
         for width in hidden_dims:
             layers.extend((nn.Linear(previous, width), nn.ReLU()))
             previous = width
@@ -66,7 +76,10 @@ class R3MRobomimicPolicy(nn.Module):
         self.mlp = nn.Sequential(*layers)
 
     def forward(
-        self, cam_main: torch.Tensor, cam_wrist: torch.Tensor
+        self,
+        cam_main: torch.Tensor,
+        cam_wrist: torch.Tensor,
+        proprioception: torch.Tensor | None = None,
     ) -> torch.Tensor:
         if (
             cam_main.ndim != 2
@@ -77,7 +90,16 @@ class R3MRobomimicPolicy(nn.Module):
                 "R3M camera features must be matching "
                 f"[B, {self.feature_dim}] tensors"
             )
-        return self.mlp(torch.cat((cam_main, cam_wrist), dim=-1))
+        conditioning = [cam_main, cam_wrist]
+        if self.proprio_dim:
+            if proprioception is None:
+                raise ValueError("This R3M policy requires proprioception")
+            if proprioception.shape != (cam_main.shape[0], self.proprio_dim):
+                raise ValueError("Unexpected R3M proprioception shape")
+            conditioning.append(self.proprio_dropout(proprioception))
+        elif proprioception is not None:
+            raise ValueError("This R3M policy was configured without proprioception")
+        return self.mlp(torch.cat(conditioning, dim=-1))
 
 
 class TCCMLPPolicy(nn.Module):

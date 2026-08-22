@@ -133,9 +133,12 @@ class TrossenMultiViewDataset(Dataset[tuple[torch.Tensor, ...]]):
         self,
         database: str | Path,
         transform: Callable[[torch.Tensor], torch.Tensor],
+        *,
+        include_state: bool = False,
     ) -> None:
         self.database = Path(database).expanduser().resolve()
         self.transform = transform
+        self.include_state = include_state
         self._connection: sqlite3.Connection | None = None
         with self._connect() as connection:
             self.row_ids = [
@@ -165,7 +168,7 @@ class TrossenMultiViewDataset(Dataset[tuple[torch.Tensor, ...]]):
 
     def __getitem__(self, index: int) -> tuple[torch.Tensor, ...]:
         row = self._get_connection().execute(
-            "SELECT jpeg_main, jpeg_wrist, action FROM samples WHERE id = ?",
+            "SELECT jpeg_main, jpeg_wrist, state, action FROM samples WHERE id = ?",
             (self.row_ids[index],),
         ).fetchone()
         if row is None:
@@ -174,25 +177,42 @@ class TrossenMultiViewDataset(Dataset[tuple[torch.Tensor, ...]]):
         for jpeg in row[:2]:
             encoded = torch.from_numpy(np.frombuffer(jpeg, dtype=np.uint8).copy())
             images.append(self.transform(decode_jpeg(encoded, mode="RGB")))
-        action = torch.from_numpy(np.frombuffer(row[2], dtype=np.float32).copy())
+        state = torch.from_numpy(np.frombuffer(row[2], dtype=np.float32).copy())
+        action = torch.from_numpy(np.frombuffer(row[3], dtype=np.float32).copy())
+        if state.shape != (7,) or not torch.isfinite(state).all():
+            raise ValueError("Trossen state must be finite and seven-dimensional")
         if action.shape != (7,) or not torch.isfinite(action).all():
             raise ValueError("Trossen action must be finite and seven-dimensional")
+        if self.include_state:
+            return images[0], images[1], state, action
         return images[0], images[1], action
+
+    def state_statistics(
+        self, indices: Sequence[int]
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        return self._vector_statistics(indices, "state")
 
     def action_statistics(
         self, indices: Sequence[int]
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        return self._vector_statistics(indices, "action")
+
+    def _vector_statistics(
+        self, indices: Sequence[int], column: str
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if column not in {"state", "action"}:
+            raise ValueError(f"Unsupported statistics column: {column}")
         if not indices:
-            raise ValueError("Action statistics require training samples")
+            raise ValueError(f"{column.title()} statistics require training samples")
         selected_ids = {self.row_ids[index] for index in indices}
-        actions = []
+        vectors = []
         with self._connect() as connection:
-            for row_id, action_bytes in connection.execute(
-                "SELECT id, action FROM samples WHERE split = 'train'"
+            for row_id, vector_bytes in connection.execute(
+                f"SELECT id, {column} FROM samples WHERE split = 'train'"
             ):
                 if int(row_id) in selected_ids:
-                    actions.append(
-                        np.frombuffer(action_bytes, dtype=np.float32).copy()
+                    vectors.append(
+                        np.frombuffer(vector_bytes, dtype=np.float32).copy()
                     )
-        tensor = torch.from_numpy(np.stack(actions))
+        tensor = torch.from_numpy(np.stack(vectors))
         return tensor.mean(0), tensor.std(0, unbiased=False)

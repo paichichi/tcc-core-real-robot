@@ -34,6 +34,23 @@ def test_minimal_r3m_robomimic_policy_has_only_raw_camera_features() -> None:
     assert not any("projection" in name for name, _ in policy.named_modules())
 
 
+def test_r3m_robomimic_policy_accepts_normalized_proprioception() -> None:
+    policy = R3MRobomimicPolicy(
+        feature_dim=8, proprio_dim=7, proprio_dropout=0.1
+    ).eval()
+    main = torch.randn(5, 8)
+    wrist = torch.randn(5, 8)
+    state = torch.randn(5, 7)
+
+    output = policy(main, wrist, state)
+
+    assert output.shape == (5, 7)
+    assert policy.mlp[0].num_features == 23
+    assert policy.proprio_dim == 7
+    with pytest.raises(ValueError, match="requires proprioception"):
+        policy(main, wrist)
+
+
 def test_r3m_multiview_policy_projects_both_camera_features() -> None:
     policy = TCCMLPPolicy(
         feature_dim=8,

@@ -94,6 +94,44 @@ def r3m_robomimic_checkpoint_payload() -> dict:
     }
 
 
+def r3m_robomimic_proprio_checkpoint_payload() -> dict:
+    model = R3MRobomimicPolicy(
+        feature_dim=3, proprio_dim=7, proprio_dropout=0.1
+    )
+    for parameter in model.parameters():
+        torch.nn.init.zeros_(parameter)
+    return {
+        "model": model.state_dict(),
+        "action_mean": torch.full((7,), 0.25),
+        "action_std": torch.ones(7),
+        "state_mean": torch.zeros(7),
+        "state_std": torch.ones(7),
+        "feature_dim": 3,
+        "config": {
+            "dataset": {"tasks": ["carrot"]},
+            "policy": {
+                "architecture": (
+                    "r3m_deterministic_mlp_dual_independent_encoder_proprio"
+                ),
+                "number_of_tasks": 1,
+                "action_dim": 7,
+                "action_chunk_size": 1,
+                "action_representation": "absolute",
+                "action_distribution": "deterministic",
+                "hidden_dimensions": [256, 256],
+                "output_layer_scale": 0.01,
+                "input_batch_norm": True,
+                "proprioception": True,
+                "proprioception_dim": 7,
+                "proprioception_dropout": 0.1,
+                "cameras": ["cam_main", "cam_wrist"],
+                "camera_fusion": "raw_concat",
+            },
+        },
+        "step": 5_000,
+    }
+
+
 def future_delta_checkpoint_payload() -> dict:
     model = TCCMLPPolicy(
         feature_dim=3,
@@ -434,6 +472,42 @@ def test_r3m_robomimic_checkpoint_predicts_absolute_joint_goal(
         device=torch.device("cpu"),
     )
 
+    assert torch.allclose(action, torch.full((7,), 0.25))
+
+
+def test_r3m_robomimic_proprio_checkpoint_requires_and_uses_state(
+    tmp_path: Path,
+) -> None:
+    checkpoint = tmp_path / "r3m_robomimic_proprio.pt"
+    torch.save(r3m_robomimic_proprio_checkpoint_payload(), checkpoint)
+    bundle = load_policy_bundle(
+        checkpoint, expected_feature_dim=3, device=torch.device("cpu")
+    )
+    backbone = IndependentCameraBackbones(
+        MeanBackbone().eval(), MeanBackbone().eval()
+    ).eval()
+    frame = np.zeros((48, 64, 3), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="requires observation_state"):
+        predict_action(
+            backbone,
+            bundle,
+            frame,
+            frame,
+            task_index=0,
+            image_size=32,
+            device=torch.device("cpu"),
+        )
+    action = predict_action(
+        backbone,
+        bundle,
+        frame,
+        frame,
+        task_index=0,
+        image_size=32,
+        device=torch.device("cpu"),
+        observation_state=np.zeros(7, dtype=np.float32),
+    )
     assert torch.allclose(action, torch.full((7,), 0.25))
 
 

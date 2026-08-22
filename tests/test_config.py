@@ -338,3 +338,29 @@ def test_v9_is_minimal_r3m_with_independent_camera_encoders() -> None:
         "validation_episodes_per_task": 10,
         "test_episodes_per_task": 10,
     }
+
+
+def test_v9_proprio_adds_closed_loop_state_without_changing_action_contract() -> None:
+    config = load_yaml(
+        ROOT / "configs" / "experiment_v9_r3m_robomimic_proprio_100.yaml"
+    )
+    policy = config["policy"]
+
+    assert policy["architecture"] == (
+        "r3m_deterministic_mlp_dual_independent_encoder_proprio"
+    )
+    assert policy["cameras"] == ["cam_main", "cam_wrist"]
+    assert policy["shared_camera_backbone"] is False
+    assert policy["camera_fusion"] == "raw_concat"
+    assert policy["proprioception"] is True
+    assert policy["proprioception_dim"] == 7
+    assert policy["normalize_state"] is True
+    assert policy["proprioception_dropout"] == 0.1
+    assert policy["state_representation"] == (
+        "measured_joint_position_6_plus_gripper"
+    )
+    assert policy["action_representation"] == "absolute"
+    assert policy["action_adapter"] == "trossen_joint_position_passthrough"
+    assert config["model_hub"]["policy_checkpoint_template"].startswith(
+        "policies_v9_r3m_robomimic_proprio/"
+    )

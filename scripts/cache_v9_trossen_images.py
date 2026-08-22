@@ -28,7 +28,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--config",
         type=Path,
-        default=Path("configs/experiment_v9_r3m_robomimic_100.yaml"),
+        default=Path("configs/experiment_v9_r3m_robomimic_proprio_100.yaml"),
     )
     parser.add_argument("--dataset-root", type=Path)
     parser.add_argument(

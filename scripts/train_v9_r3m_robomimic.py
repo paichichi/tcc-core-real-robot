@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Train the minimal V9 R3M MLP with independent camera encoders."""
+"""Train V9 R3M with independent cameras and closed-loop robot state."""
 
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--config",
         type=Path,
-        default=Path("configs/experiment_v9_r3m_robomimic_100.yaml"),
+        default=Path("configs/experiment_v9_r3m_robomimic_proprio_100.yaml"),
     )
     parser.add_argument("--image-buffer", type=Path, required=True)
     parser.add_argument("--backbone", default="ours_rn50")
@@ -59,6 +59,7 @@ def save_checkpoint(
     backbone: nn.Module,
     model: R3MRobomimicPolicy,
     normalizer: ActionNormalizer,
+    state_normalizer: ActionNormalizer,
     config: dict,
     metadata: dict,
     step: int,
@@ -70,6 +71,8 @@ def save_checkpoint(
             "model": cpu_state(model),
             "action_mean": normalizer.mean.detach().cpu(),
             "action_std": normalizer.std.detach().cpu(),
+            "state_mean": state_normalizer.mean.detach().cpu(),
+            "state_std": state_normalizer.std.detach().cpu(),
             "feature_dim": int(metadata["feature_dim"]),
             "backbone_metadata": metadata,
             "config": config,
@@ -88,6 +91,7 @@ def evaluate(
     model: R3MRobomimicPolicy,
     loader: DataLoader,
     normalizer: ActionNormalizer,
+    state_normalizer: ActionNormalizer,
     device: torch.device,
 ) -> tuple[float, float, list[float]]:
     backbone.eval()
@@ -95,12 +99,17 @@ def evaluate(
     total_mse = 0.0
     total_absolute_error = torch.zeros(model.action_dim, device=device)
     count = 0
-    for main_images, wrist_images, actions in loader:
+    for main_images, wrist_images, states, actions in loader:
         main_images = main_images.to(device, non_blocking=True)
         wrist_images = wrist_images.to(device, non_blocking=True)
         actions = actions.to(device, non_blocking=True)
+        states = states.to(device, non_blocking=True)
         main_features, wrist_features = backbone(main_images, wrist_images)
-        prediction = model(main_features.float(), wrist_features.float())
+        prediction = model(
+            main_features.float(),
+            wrist_features.float(),
+            state_normalizer.normalize(states),
+        )
         target = normalizer.normalize(actions)
         batch = actions.shape[0]
         total_mse += float(nn.functional.mse_loss(prediction, target)) * batch
@@ -116,7 +125,7 @@ def main() -> None:
     config = yaml.safe_load(args.config.read_text())
     policy = config["policy"]
     expected_contract = {
-        "architecture": "r3m_deterministic_mlp_dual_independent_encoder",
+        "architecture": "r3m_deterministic_mlp_dual_independent_encoder_proprio",
         "cameras": ["cam_main", "cam_wrist"],
         "shared_camera_backbone": False,
         "camera_fusion": "raw_concat",
@@ -124,6 +133,9 @@ def main() -> None:
         "action_adapter": "trossen_joint_position_passthrough",
         "action_distribution": "deterministic",
         "loss": "mse",
+        "proprioception": True,
+        "proprioception_dim": 7,
+        "normalize_state": True,
     }
     mismatches = {
         key: (policy.get(key), value)
@@ -140,13 +152,10 @@ def main() -> None:
         "camera_projection_dim",
         "camera_gate_hidden_dim",
         "task_conditioning",
-        "proprioception",
-        "proprioception_dim",
         "progress_conditioning",
         "progress_dim",
         "dropout",
         "input_layer_norm",
-        "normalize_state",
         "num_modes",
         "min_std",
     }
@@ -157,6 +166,13 @@ def main() -> None:
             f"policy={present}, augmentation={'augmentation' in config}, "
             f"sampling={'sampling' in config}"
         )
+    if policy.get("state_representation") != (
+        "measured_joint_position_6_plus_gripper"
+    ):
+        raise ValueError("V9 proprioception must use measured 7-D joint state")
+    proprioception_dropout = float(policy.get("proprioception_dropout", 0.0))
+    if not 0.0 <= proprioception_dropout < 1.0:
+        raise ValueError("proprioception_dropout must be in [0, 1)")
 
     require_complete_trossen_buffer(
         args.image_buffer,
@@ -190,6 +206,7 @@ def main() -> None:
     dataset = TrossenMultiViewDataset(
         args.image_buffer,
         build_r3m_transform(int(metadata["image_size"])),
+        include_state=True,
     )
     split = config["split"]
     train_indices, validation_indices, test_indices = episode_split_indices(
@@ -201,11 +218,15 @@ def main() -> None:
     )
     action_mean, action_std = dataset.action_statistics(train_indices)
     normalizer = ActionNormalizer(action_mean, action_std).to(device)
+    state_mean, state_std = dataset.state_statistics(train_indices)
+    state_normalizer = ActionNormalizer(state_mean, state_std).to(device)
     model = R3MRobomimicPolicy(
         feature_dim=int(metadata["feature_dim"]),
         action_dim=int(policy["action_dim"]),
         hidden_dims=tuple(policy["hidden_dimensions"]),
         output_layer_scale=float(policy["output_layer_scale"]),
+        proprio_dim=int(policy["proprioception_dim"]),
+        proprio_dropout=proprioception_dropout,
     ).to(device)
 
     iterations = args.iterations or int(policy["training_steps"])
@@ -251,6 +272,9 @@ def main() -> None:
 
     output_dir = args.output_dir.expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "training_config.yaml").write_text(
+        yaml.safe_dump(config, sort_keys=False)
+    )
     eval_every = int(policy["eval_every"])
     history: list[dict[str, object]] = []
     best_mse = float("inf")
@@ -261,12 +285,17 @@ def main() -> None:
     for step in range(1, iterations + 1):
         backbone.train()
         model.train()
-        main_images, wrist_images, actions = next(iterator)
+        main_images, wrist_images, states, actions = next(iterator)
         main_images = main_images.to(device, non_blocking=True)
         wrist_images = wrist_images.to(device, non_blocking=True)
         actions = actions.to(device, non_blocking=True)
+        states = states.to(device, non_blocking=True)
         main_features, wrist_features = backbone(main_images, wrist_images)
-        prediction = model(main_features.float(), wrist_features.float())
+        prediction = model(
+            main_features.float(),
+            wrist_features.float(),
+            state_normalizer.normalize(states),
+        )
         loss = nn.functional.mse_loss(prediction, normalizer.normalize(actions))
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
@@ -282,7 +311,12 @@ def main() -> None:
             )
         if step % eval_every == 0 or step == iterations:
             validation_mse, validation_mae, validation_mae_per_dim = evaluate(
-                backbone, model, validation_loader, normalizer, device
+                backbone,
+                model,
+                validation_loader,
+                normalizer,
+                state_normalizer,
+                device,
             )
             row = {
                 "step": step,
@@ -297,6 +331,7 @@ def main() -> None:
                 backbone=backbone,
                 model=model,
                 normalizer=normalizer,
+                state_normalizer=state_normalizer,
                 config=config,
                 metadata=metadata,
                 step=step,
@@ -321,13 +356,19 @@ def main() -> None:
         backbone=backbone,
         model=model,
         normalizer=normalizer,
+        state_normalizer=state_normalizer,
         config=config,
         metadata=metadata,
         step=best_step,
         validation_mse=best_mse,
     )
     test_mse, test_mae, test_mae_per_dim = evaluate(
-        backbone, model, test_loader, normalizer, device
+        backbone,
+        model,
+        test_loader,
+        normalizer,
+        state_normalizer,
+        device,
     )
     metrics = {
         "history": history,
@@ -341,7 +382,9 @@ def main() -> None:
         "test_transitions": len(test_indices),
         "training_iterations": iterations,
         "action_representation": "absolute",
-        "proprioception": False,
+        "proprioception": True,
+        "proprioception_dim": 7,
+        "proprioception_dropout": proprioception_dropout,
         "action_distribution": "deterministic",
         "camera_backbones": "independent",
         "camera_fusion": "raw_concat",
