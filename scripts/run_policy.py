@@ -100,6 +100,16 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--inference-warmup-steps", type=int)
+    parser.add_argument(
+        "--gmm-inference",
+        choices=("checkpoint", "highest-probability-mode"),
+        default="checkpoint",
+        help=(
+            "Override HRP GMM deployment inference. 'checkpoint' preserves the "
+            "official categorical sampling; 'highest-probability-mode' is "
+            "deterministic and intended for shadow comparison before actuation."
+        ),
+    )
     parser.add_argument("--controller-timeout", type=float, default=20.0)
     parser.add_argument(
         "--execute-home",
@@ -708,6 +718,7 @@ def main() -> None:
             "First executed action home anchor: "
             f"{'ENABLED' if force_first_action_home else 'DISABLED'}\n"
         )
+        report.write(f"GMM inference override: {args.gmm_inference}\n")
         report.write(f"Maximum steps: {max_steps}\n\n")
         if dataset_action_min is not None and dataset_action_max is not None:
             report.write(f"Dataset action minimum: {dataset_action_min}\n")
@@ -845,6 +856,11 @@ def main() -> None:
                         observation_state=warm_state,
                         execution_delta_gain_override=runtime_execution_delta_gain,
                         episode_progress=0.0,
+                        gmm_inference_override=(
+                            None
+                            if args.gmm_inference == "checkpoint"
+                            else args.gmm_inference
+                        ),
                     )
                 if home_session is not None:
                     home_reference = home_session.read_positions()
@@ -902,6 +918,11 @@ def main() -> None:
                         execution_delta_gain_override=runtime_execution_delta_gain,
                         episode_progress=min(
                             step / max(dataset_rollout_steps - 1, 1), 1.0
+                        ),
+                        gmm_inference_override=(
+                            None
+                            if args.gmm_inference == "checkpoint"
+                            else args.gmm_inference
                         ),
                     )
                     action, anchored = apply_first_action_home_anchor(

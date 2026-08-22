@@ -328,6 +328,7 @@ def predict_action(
     observation_state: list[float] | np.ndarray | torch.Tensor | None = None,
     execution_delta_gain_override: float | None = None,
     episode_progress: float | torch.Tensor | None = None,
+    gmm_inference_override: str | None = None,
 ) -> torch.Tensor:
     """Predict one denormalized 7-D absolute action on CPU."""
     number_of_tasks = int(bundle.config["policy"]["number_of_tasks"])
@@ -384,13 +385,38 @@ def predict_action(
             )
             if not bool(valid_progress.all().item()):
                 raise ValueError("episode_progress must be finite and within [0, 1]")
-        normalized_action = bundle.model(
-            features[0:1],
-            features[1:2] if "cam_wrist" in bundle.model.camera_names else None,
-            torch.tensor([task_index], device=device),
-            normalized_state,
-            progress,
+        cam_main_features = features[0:1]
+        cam_wrist_features = (
+            features[1:2] if "cam_wrist" in bundle.model.camera_names else None
         )
+        task_tensor = torch.tensor([task_index], device=device)
+        if gmm_inference_override not in (None, "highest-probability-mode"):
+            raise ValueError(
+                "gmm_inference_override must be None or "
+                "'highest-probability-mode'"
+            )
+        if (
+            gmm_inference_override == "highest-probability-mode"
+            and isinstance(bundle.model, HRPSingleViewGaussianMixturePolicy)
+        ):
+            means, _, logits = bundle.model.mixture_parameters(
+                cam_main_features,
+                cam_wrist_features,
+                task_tensor,
+                normalized_state,
+                progress,
+            )
+            modes = torch.argmax(logits, dim=-1)
+            batch = torch.arange(means.shape[0], device=means.device)
+            normalized_action = means[batch, modes]
+        else:
+            normalized_action = bundle.model(
+                cam_main_features,
+                cam_wrist_features,
+                task_tensor,
+                normalized_state,
+                progress,
+            )
         action = bundle.normalizer.denormalize(normalized_action)
         policy_config = bundle.config["policy"]
         action_representation = policy_config.get(

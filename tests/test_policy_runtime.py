@@ -6,7 +6,11 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from tcc_real_robot.policy import TCCMLPGaussianMixturePolicy, TCCMLPPolicy
+from tcc_real_robot.policy import (
+    HRPSingleViewGaussianMixturePolicy,
+    TCCMLPGaussianMixturePolicy,
+    TCCMLPPolicy,
+)
 from tcc_real_robot.policy_runtime import (
     load_policy_bundle,
     predict_action,
@@ -158,6 +162,50 @@ def hrp_gmm_checkpoint_payload() -> dict:
             },
         },
         "step": 50_000,
+    }
+
+
+def hrp_single_view_checkpoint_payload() -> dict:
+    model = HRPSingleViewGaussianMixturePolicy(
+        feature_dim=3,
+        action_dim=7,
+        state_dim=7,
+        hidden_dims=(4, 4),
+        num_modes=5,
+        dropout=0.0,
+    )
+    for parameter in model.parameters():
+        torch.nn.init.zeros_(parameter)
+    with torch.no_grad():
+        model.mixture_means.bias.reshape(5, 7)[2].fill_(0.25)
+        model.mixture_logits.bias.copy_(torch.tensor([0.0, 1.0, 5.0, 2.0, 0.0]))
+    return {
+        "model": model.state_dict(),
+        "action_mean": torch.zeros(7),
+        "action_std": torch.ones(7),
+        "state_mean": torch.zeros(7),
+        "state_std": torch.ones(7),
+        "feature_dim": 3,
+        "config": {
+            "dataset": {"tasks": ["carrot"]},
+            "policy": {
+                "architecture": "hrp_state_token_gmm",
+                "number_of_tasks": 1,
+                "action_dim": 7,
+                "action_chunk_size": 1,
+                "action_representation": "absolute",
+                "action_distribution": "gaussian_mixture",
+                "num_modes": 5,
+                "min_std": 1e-4,
+                "hidden_dimensions": [4, 4],
+                "dropout": 0.0,
+                "precision": "float32",
+                "proprioception": True,
+                "proprioception_dim": 7,
+                "cameras": ["cam_main"],
+            },
+        },
+        "step": 40_000,
     }
 
 
@@ -408,6 +456,29 @@ def test_hrp_gmm_current_delta_reconstructs_absolute_target(tmp_path: Path) -> N
     )
 
     assert torch.allclose(action, torch.from_numpy(state) + 0.01)
+
+
+def test_hrp_single_view_can_use_highest_probability_mode(tmp_path: Path) -> None:
+    checkpoint = tmp_path / "hrp_single_view.pt"
+    torch.save(hrp_single_view_checkpoint_payload(), checkpoint)
+    bundle = load_policy_bundle(
+        checkpoint, expected_feature_dim=3, device=torch.device("cpu")
+    )
+    frame = np.zeros((48, 64, 3), dtype=np.uint8)
+
+    action = predict_action(
+        MeanBackbone().eval(),
+        bundle,
+        frame,
+        frame,
+        task_index=0,
+        image_size=32,
+        device=torch.device("cpu"),
+        observation_state=np.zeros(7, dtype=np.float32),
+        gmm_inference_override="highest-probability-mode",
+    )
+
+    assert torch.allclose(action, torch.full((7,), 0.25))
 
 
 def test_end_to_end_checkpoint_restores_fine_tuned_backbone() -> None:
