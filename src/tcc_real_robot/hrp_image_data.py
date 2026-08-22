@@ -68,6 +68,7 @@ def require_complete_joint_position_buffer(
     episodes_per_task: int,
     frames_per_episode: int,
     camera: str = "cam_main",
+    cameras: Sequence[str] | None = None,
 ) -> dict[str, object]:
     """Prove that a formal image buffer contains the complete fixed dataset."""
     if not tasks or episodes_per_task <= 0 or frames_per_episode <= 0:
@@ -76,15 +77,24 @@ def require_complete_joint_position_buffer(
     manifest = require_joint_position_manifest(path)
     expected_episodes = len(tasks) * episodes_per_task
     expected_samples = expected_episodes * frames_per_episode
-    expected_manifest = {
+    expected_manifest: dict[str, object] = {
         "dataset_revision": dataset_revision,
         "tasks": list(tasks),
-        "camera": camera,
         "episodes": expected_episodes,
         "episodes_per_task": episodes_per_task,
         "frames_per_episode": frames_per_episode,
         "samples": expected_samples,
     }
+    if cameras is None:
+        expected_manifest["camera"] = camera
+        jpeg_columns = ("jpeg",)
+    else:
+        if tuple(cameras) != ("cam_main", "cam_wrist"):
+            raise ValueError(
+                "Multi-view HRP buffers require cam_main and cam_wrist in order"
+            )
+        expected_manifest["cameras"] = list(cameras)
+        jpeg_columns = ("jpeg_main", "jpeg_wrist")
     manifest_mismatches = {
         key: (manifest.get(key), value)
         for key, value in expected_manifest.items()
@@ -148,10 +158,11 @@ def require_complete_joint_position_buffer(
                 f"{malformed_episodes[:10]}"
             )
 
+        empty_jpeg = " OR ".join(f"length({column}) = 0" for column in jpeg_columns)
         malformed_blobs = connection.execute(
-            """
+            f"""
             SELECT COUNT(*) FROM samples
-            WHERE length(jpeg) = 0 OR length(state) != ? OR length(action) != ?
+            WHERE {empty_jpeg} OR length(state) != ? OR length(action) != ?
             """,
             (7 * np.dtype(np.float32).itemsize, 7 * np.dtype(np.float32).itemsize),
         ).fetchone()[0]
@@ -374,4 +385,40 @@ class HRPImageDataset(Dataset[tuple[torch.Tensor, ...]]):
             state_tensor.std(0, unbiased=False),
             action_tensor.mean(0),
             action_tensor.std(0, unbiased=False),
+        )
+
+
+class HRPMultiViewImageDataset(HRPImageDataset):
+    """Synchronized main and wrist JPEG observations for late-fusion training."""
+
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, ...]:
+        row = (
+            self._get_connection()
+            .execute(
+                "SELECT jpeg_main, jpeg_wrist, state, action, task_index "
+                "FROM samples WHERE id = ?",
+                (self.row_ids[index],),
+            )
+            .fetchone()
+        )
+        if row is None:
+            raise IndexError(index)
+        jpeg_main, jpeg_wrist, state_bytes, action_bytes, task_index = row
+        images = []
+        for jpeg in (jpeg_main, jpeg_wrist):
+            encoded = torch.from_numpy(np.frombuffer(jpeg, dtype=np.uint8).copy())
+            image = decode_jpeg(encoded, mode="RGB")
+            if self.transform is not None:
+                image = self.transform(image)
+            images.append(image)
+        state = torch.from_numpy(np.frombuffer(state_bytes, dtype=np.float32).copy())
+        action = torch.from_numpy(np.frombuffer(action_bytes, dtype=np.float32).copy())
+        if state.shape != (7,) or action.shape != (7,):
+            raise ValueError("HRP image buffer requires 7-D state and action")
+        return (
+            images[0],
+            images[1],
+            state,
+            action,
+            torch.tensor(int(task_index)),
         )

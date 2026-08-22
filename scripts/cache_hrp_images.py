@@ -7,6 +7,7 @@ import argparse
 import io
 import json
 import sqlite3
+from contextlib import ExitStack
 from pathlib import Path
 
 import av
@@ -28,7 +29,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--config",
         type=Path,
-        default=Path("configs/experiment_v8_hrp_official_single_view_60.yaml"),
+        default=Path("configs/experiment_v9_trossen_joint_delta_100.yaml"),
     )
     parser.add_argument("--dataset-root", type=Path)
     parser.add_argument(
@@ -52,7 +53,8 @@ def initialize_database(connection: sqlite3.Connection) -> None:
             task_index INTEGER NOT NULL,
             episode_index INTEGER NOT NULL,
             frame_index INTEGER NOT NULL,
-            jpeg BLOB NOT NULL,
+            jpeg_main BLOB NOT NULL,
+            jpeg_wrist BLOB NOT NULL,
             state BLOB NOT NULL,
             action BLOB NOT NULL,
             UNIQUE(task_index, episode_index, frame_index)
@@ -93,6 +95,15 @@ def main() -> None:
 
     with sqlite3.connect(output) as connection:
         initialize_database(connection)
+        sample_columns = {
+            str(row[1]) for row in connection.execute("PRAGMA table_info(samples)")
+        }
+        required_columns = {"jpeg_main", "jpeg_wrist"}
+        if not required_columns.issubset(sample_columns):
+            raise RuntimeError(
+                "Existing image buffer uses the old single-camera schema; rerun "
+                "cache_hrp_images.py with --overwrite"
+            )
         existing_samples = int(
             connection.execute("SELECT COUNT(*) FROM samples").fetchone()[0]
         )
@@ -136,21 +147,36 @@ def main() -> None:
             if not np.isfinite(states).all() or not np.isfinite(actions).all():
                 raise RuntimeError(f"Non-finite state/action in {record}")
             rows = []
-            with av.open(str(record.video_path("cam_main"))) as container:
-                for frame_index, frame in enumerate(
-                    container.decode(container.streams.video[0])
+            with ExitStack() as stack:
+                main_container = stack.enter_context(
+                    av.open(str(record.video_path("cam_main")))
+                )
+                wrist_container = stack.enter_context(
+                    av.open(str(record.video_path("cam_wrist")))
+                )
+                main_frames = main_container.decode(main_container.streams.video[0])
+                wrist_frames = wrist_container.decode(wrist_container.streams.video[0])
+                for frame_index, (main_frame, wrist_frame) in enumerate(
+                    zip(main_frames, wrist_frames, strict=True)
                 ):
-                    buffer = io.BytesIO()
-                    frame.to_image().save(buffer, format="JPEG", quality=95)
+                    main_buffer = io.BytesIO()
+                    wrist_buffer = io.BytesIO()
+                    main_frame.to_image().save(
+                        main_buffer, format="JPEG", quality=95
+                    )
+                    wrist_frame.to_image().save(
+                        wrist_buffer, format="JPEG", quality=95
+                    )
                     if frame_index >= len(states):
-                        break
+                        raise RuntimeError(f"Video is longer than state data in {record}")
                     rows.append(
                         (
                             record.split,
                             record.task_index,
                             record.episode_index,
                             frame_index,
-                            buffer.getvalue(),
+                            main_buffer.getvalue(),
+                            wrist_buffer.getvalue(),
                             states[frame_index].tobytes(),
                             actions[frame_index].tobytes(),
                         )
@@ -163,8 +189,9 @@ def main() -> None:
             connection.executemany(
                 """
                 INSERT INTO samples(
-                    split, task_index, episode_index, frame_index, jpeg, state, action
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    split, task_index, episode_index, frame_index,
+                    jpeg_main, jpeg_wrist, state, action
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 rows,
             )
@@ -174,7 +201,8 @@ def main() -> None:
             "dataset_revision": config["dataset"]["revision"],
             "config": str(args.config),
             "tasks": list(config["dataset"]["tasks"]),
-            "camera": "cam_main",
+            "cameras": ["cam_main", "cam_wrist"],
+            "camera_fusion": "late_concat",
             "state_semantics": JOINT_STATE_SEMANTICS,
             "action_semantics": JOINT_ACTION_SEMANTICS,
             "action_source": "original_lerobot_action_column",
@@ -207,6 +235,7 @@ def main() -> None:
             tasks=[str(task) for task in config["dataset"]["tasks"]],
             episodes_per_task=int(config["dataset"]["demonstrations_per_task"]),
             frames_per_episode=int(config["evaluation"]["max_rollout_steps"]),
+            cameras=("cam_main", "cam_wrist"),
         )
     print(output)
 

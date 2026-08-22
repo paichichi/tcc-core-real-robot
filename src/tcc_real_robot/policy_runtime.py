@@ -17,6 +17,7 @@ from tcc_real_robot.policy import (
     TCCMLPGaussianMixturePolicy,
     TCCMLPPolicy,
 )
+from tcc_real_robot.tcc_backbone import IndependentCameraBackbones
 
 IMAGENET_MEAN = torch.tensor((0.485, 0.456, 0.406)).view(1, 3, 1, 1)
 IMAGENET_STD = torch.tensor((0.229, 0.224, 0.225)).view(1, 3, 1, 1)
@@ -45,6 +46,7 @@ def validate_policy_contract(
     actual = bundle.config["policy"]
     fields = (
         "cameras",
+        "shared_camera_backbone",
         "camera_fusion",
         "camera_projection_dim",
         "camera_gate_hidden_dim",
@@ -339,20 +341,32 @@ def predict_action(
         frames.append(cam_wrist_rgb)
     images = preprocess_rgb_frames(frames, image_size, device=device)
     policy_config = bundle.config["policy"]
-    strict_hrp_float32 = (
-        policy_config.get("architecture") == "hrp_state_token_gmm"
-        and policy_config.get("precision") == "float32"
-    )
-    if strict_hrp_float32 and device.type == "cuda":
+    strict_float32 = policy_config.get("precision") == "float32"
+    if strict_float32 and device.type == "cuda":
         torch.set_float32_matmul_precision("highest")
         torch.backends.cuda.matmul.allow_tf32 = False
         torch.backends.cudnn.allow_tf32 = False
     with torch.autocast(
         device_type=device.type,
         dtype=torch.bfloat16,
-        enabled=device.type == "cuda" and not strict_hrp_float32,
+        enabled=device.type == "cuda" and not strict_float32,
     ):
-        features = backbone(images).float()
+        if isinstance(backbone, IndependentCameraBackbones):
+            if "cam_wrist" not in bundle.model.camera_names:
+                raise ValueError("Independent camera backbones require cam_wrist")
+            cam_main_features, cam_wrist_features = backbone(
+                images[0:1], images[1:2]
+            )
+            cam_main_features = cam_main_features.float()
+            cam_wrist_features = cam_wrist_features.float()
+        else:
+            features = backbone(images).float()
+            cam_main_features = features[0:1]
+            cam_wrist_features = (
+                features[1:2]
+                if "cam_wrist" in bundle.model.camera_names
+                else None
+            )
         proprioception: torch.Tensor | None = None
         if bundle.model.proprio_dim:
             if observation_state is None or bundle.state_normalizer is None:
@@ -385,10 +399,6 @@ def predict_action(
             )
             if not bool(valid_progress.all().item()):
                 raise ValueError("episode_progress must be finite and within [0, 1]")
-        cam_main_features = features[0:1]
-        cam_wrist_features = (
-            features[1:2] if "cam_wrist" in bundle.model.camera_names else None
-        )
         task_tensor = torch.tensor([task_index], device=device)
         if gmm_inference_override not in (None, "highest-probability-mode"):
             raise ValueError(

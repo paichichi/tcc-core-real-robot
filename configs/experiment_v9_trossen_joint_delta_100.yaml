@@ -15,7 +15,7 @@ dataset:
 
 observations:
   fps: 20
-  cameras: [cam_main]
+  cameras: [cam_main, cam_wrist]
   resolution: [640, 480]
 
 backbone:
@@ -40,13 +40,13 @@ model_hub:
 
 policy:
   implementation: tcc_mlp_bc_v9_trossen_joint_delta
-  architecture: hrp_state_token_gmm
-  architecture_reference: data4robotics_hrp_release_default
+  architecture: dual_encoder_mlp_gmm
+  architecture_reference: robomimic_multiview_late_fusion
   action_adapter: current_state_plus_joint_delta_to_position
-  cameras: [cam_main]
+  cameras: [cam_main, cam_wrist]
   shared_camera_backbone: false
-  camera_fusion: raw_concat
-  camera_projection_dim: 0
+  camera_fusion: project_then_concat
+  camera_projection_dim: 128
   camera_gate_hidden_dim: 0
   task_conditioning: null
   number_of_tasks: 1
@@ -83,8 +83,9 @@ policy:
   weight_decay: 0.0001
   loss: gmm_nll
   training_steps: 50000
-  batch_size: 150
+  batch_size: 32
   learning_rate: 0.0001
+  backbone_learning_rate: 0.00001
   precision: float32
   num_workers: 10
   eval_every: 5000

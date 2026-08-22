@@ -12,6 +12,25 @@ from torch import nn
 from torch.nn import functional as F
 
 
+class IndependentCameraBackbones(nn.Module):
+    """Two separately-parameterized encoders initialized from one checkpoint."""
+
+    def __init__(self, cam_main: nn.Module, cam_wrist: nn.Module) -> None:
+        super().__init__()
+        main_dim = int(cam_main.output_dim)
+        wrist_dim = int(cam_wrist.output_dim)
+        if main_dim != wrist_dim:
+            raise ValueError("Independent camera backbones must share an output size")
+        self.cam_main = cam_main
+        self.cam_wrist = cam_wrist
+        self.output_dim = main_dim
+
+    def forward(
+        self, cam_main: torch.Tensor, cam_wrist: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        return self.cam_main(cam_main), self.cam_wrist(cam_wrist)
+
+
 def _checkpoint_args(checkpoint: dict[str, Any]) -> dict[str, Any]:
     args = checkpoint.get("args", {})
     if isinstance(args, dict):
@@ -195,3 +214,53 @@ def load_trainable_tcc_backbone(
         ),
     }
     return backbone, metadata
+
+
+def load_independent_camera_backbones(
+    checkpoint_path: str | Path,
+    tcc_source_root: str | Path,
+    device: torch.device,
+    *,
+    trainable: bool,
+) -> tuple[IndependentCameraBackbones, dict[str, Any]]:
+    """Initialize independent main/wrist encoders from the same source weights."""
+    loader = load_trainable_tcc_backbone if trainable else load_frozen_tcc_backbone
+    cam_main, main_metadata = loader(checkpoint_path, tcc_source_root, device)
+    cam_wrist, wrist_metadata = loader(checkpoint_path, tcc_source_root, device)
+    comparable = ("feature_dim", "image_size", "source_format", "backbone")
+    mismatches = {
+        key: (main_metadata.get(key), wrist_metadata.get(key))
+        for key in comparable
+        if main_metadata.get(key) != wrist_metadata.get(key)
+    }
+    if mismatches:
+        raise RuntimeError(f"Independent backbone metadata mismatch: {mismatches}")
+    model = IndependentCameraBackbones(cam_main, cam_wrist).to(device)
+    metadata = {
+        **main_metadata,
+        "camera_backbones": "independent",
+        "camera_names": ["cam_main", "cam_wrist"],
+        "trainable_parameters": sum(
+            parameter.numel()
+            for parameter in model.parameters()
+            if parameter.requires_grad
+        ),
+    }
+    return model, metadata
+
+
+def load_policy_camera_backbones(
+    checkpoint_path: str | Path,
+    tcc_source_root: str | Path,
+    device: torch.device,
+    policy_config: dict[str, Any],
+) -> tuple[nn.Module, dict[str, Any]]:
+    """Load the encoder topology declared by a policy configuration."""
+    if (
+        policy_config.get("shared_camera_backbone") is False
+        and policy_config.get("cameras") == ["cam_main", "cam_wrist"]
+    ):
+        return load_independent_camera_backbones(
+            checkpoint_path, tcc_source_root, device, trainable=False
+        )
+    return load_frozen_tcc_backbone(checkpoint_path, tcc_source_root, device)

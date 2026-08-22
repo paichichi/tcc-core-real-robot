@@ -12,6 +12,7 @@ from tcc_real_robot.hrp_image_data import (
     JOINT_ACTION_SEMANTICS,
     JOINT_STATE_SEMANTICS,
     HRPImageDataset,
+    HRPMultiViewImageDataset,
     episode_level_transition_split,
     official_hrp_transition_split,
     require_complete_joint_position_buffer,
@@ -71,6 +72,43 @@ def test_hrp_image_dataset_decodes_jpeg_and_joint_action(tmp_path: Path) -> None
     assert int(task) == 2
     assert torch.allclose(state_mean, torch.from_numpy(state))
     assert torch.allclose(action_mean, torch.full((7,), 0.25))
+
+
+def test_hrp_multiview_dataset_decodes_synchronized_cameras(tmp_path: Path) -> None:
+    database = tmp_path / "dual.sqlite3"
+    main = torch.zeros((3, 16, 16), dtype=torch.uint8)
+    wrist = torch.full((3, 16, 16), 255, dtype=torch.uint8)
+    main_jpeg = torchvision.io.encode_jpeg(main).numpy().tobytes()
+    wrist_jpeg = torchvision.io.encode_jpeg(wrist).numpy().tobytes()
+    vector = np.arange(7, dtype=np.float32)
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "CREATE TABLE samples (id INTEGER PRIMARY KEY, split TEXT, "
+            "jpeg_main BLOB, jpeg_wrist BLOB, state BLOB, action BLOB, "
+            "task_index INTEGER)"
+        )
+        connection.execute(
+            "INSERT INTO samples(split, jpeg_main, jpeg_wrist, state, action, "
+            "task_index) VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                "train",
+                main_jpeg,
+                wrist_jpeg,
+                vector.tobytes(),
+                vector.tobytes(),
+                0,
+            ),
+        )
+
+    dataset = HRPMultiViewImageDataset(database, "train")
+    decoded_main, decoded_wrist, state, action, task = dataset[0]
+
+    assert decoded_main.shape == decoded_wrist.shape == (3, 16, 16)
+    assert float(decoded_main.float().mean()) < 1.0
+    assert float(decoded_wrist.float().mean()) > 254.0
+    assert torch.equal(state, torch.from_numpy(vector))
+    assert torch.equal(action, torch.from_numpy(vector))
+    assert int(task) == 0
 
 
 def test_hrp_statistics_can_exclude_heldout_rows(tmp_path: Path) -> None:

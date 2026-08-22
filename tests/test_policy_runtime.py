@@ -18,6 +18,7 @@ from tcc_real_robot.policy_runtime import (
     restore_policy_backbone,
     validate_policy_contract,
 )
+from tcc_real_robot.tcc_backbone import IndependentCameraBackbones
 
 
 class MeanBackbone(torch.nn.Module):
@@ -25,6 +26,15 @@ class MeanBackbone(torch.nn.Module):
 
     def forward(self, images: torch.Tensor) -> torch.Tensor:
         return images.mean(dim=(2, 3))
+
+
+class MeanBackboneWithScale(MeanBackbone):
+    def __init__(self, scale: float) -> None:
+        super().__init__()
+        self.scale = torch.nn.Parameter(torch.tensor(scale))
+
+    def forward(self, images: torch.Tensor) -> torch.Tensor:
+        return super().forward(images) * self.scale
 
 
 def checkpoint_payload() -> dict:
@@ -544,6 +554,22 @@ def test_end_to_end_checkpoint_restores_fine_tuned_backbone() -> None:
     assert changed is True
     assert torch.equal(restored.weight, backbone.weight)
     assert torch.equal(restored.bias, backbone.bias)
+
+
+def test_independent_camera_backbones_restore_both_parameter_sets() -> None:
+    original = IndependentCameraBackbones(
+        MeanBackboneWithScale(2.0), MeanBackboneWithScale(3.0)
+    )
+    restored = IndependentCameraBackbones(
+        MeanBackboneWithScale(0.0), MeanBackboneWithScale(0.0)
+    )
+    policy_bundle = SimpleNamespace(backbone_state=original.state_dict())
+
+    changed = restore_policy_backbone(restored, policy_bundle)
+
+    assert changed is True
+    assert torch.equal(restored.cam_main.scale, torch.tensor(2.0))
+    assert torch.equal(restored.cam_wrist.scale, torch.tensor(3.0))
 
 
 def test_checkpoint_without_embedded_backbone_reports_not_restored() -> None:

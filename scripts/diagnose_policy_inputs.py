@@ -23,8 +23,12 @@ from tcc_real_robot.policy_runtime import (
     predict_action,
     preprocess_rgb_frames,
     resolve_device,
+    restore_policy_backbone,
 )
-from tcc_real_robot.tcc_backbone import load_frozen_tcc_backbone
+from tcc_real_robot.tcc_backbone import (
+    IndependentCameraBackbones,
+    load_policy_camera_backbones,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -97,7 +101,20 @@ def encode_frames(
         dtype=torch.bfloat16,
         enabled=device.type == "cuda",
     ):
-        features = backbone(images).float()
+        if isinstance(backbone, IndependentCameraBackbones):
+            if len(frames) % 2:
+                raise ValueError("Independent camera diagnostics require frame pairs")
+            main_features, wrist_features = backbone(images[0::2], images[1::2])
+            features = torch.empty(
+                (len(frames), main_features.shape[1]),
+                dtype=main_features.dtype,
+                device=main_features.device,
+            )
+            features[0::2] = main_features
+            features[1::2] = wrist_features
+            features = features.float()
+        else:
+            features = backbone(images).float()
     return torch_f.normalize(features, dim=1).cpu()
 
 
@@ -203,14 +220,22 @@ def main() -> None:
         cache_dir=args.hub_cache_dir,
         local_files_only=args.offline,
     )
-    backbone, backbone_metadata = load_frozen_tcc_backbone(
-        assets.backbone_path, args.tcc_source_root, device
+    backbone, backbone_metadata = load_policy_camera_backbones(
+        assets.backbone_path,
+        args.tcc_source_root,
+        device,
+        config["policy"],
     )
     bundle = load_policy_bundle(
         assets.policy_path,
         expected_feature_dim=int(backbone_metadata["feature_dim"]),
         device=device,
     )
+    restored = restore_policy_backbone(backbone, bundle)
+    if config.get("backbone", {}).get("frozen") is False and not restored:
+        raise RuntimeError(
+            "End-to-end checkpoint is missing its embedded backbone_model"
+        )
     width, height = [int(value) for value in config["observations"]["resolution"]]
     camera_fps = float(robot_config["policy_evaluation"]["camera_capture_fps"])
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Train the single-view HRP MLP-GMM policy end to end from JPEG observations."""
+"""Train a synchronized dual-view MLP-GMM policy end to end from JPEGs."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ import argparse
 import json
 import random
 import shutil
-from itertools import chain
 from pathlib import Path
 
 import numpy as np
@@ -16,7 +15,7 @@ import yaml
 from torch.utils.data import DataLoader, RandomSampler, Subset, WeightedRandomSampler
 
 from tcc_real_robot.hrp_image_data import (
-    HRPImageDataset,
+    HRPMultiViewImageDataset,
     episode_level_transition_split,
     official_hrp_transition_split,
     require_complete_joint_position_buffer,
@@ -24,12 +23,9 @@ from tcc_real_robot.hrp_image_data import (
 )
 from tcc_real_robot.hrp_vision import build_hrp_image_transform
 from tcc_real_robot.model_assets import resolve_backbone_asset
-from tcc_real_robot.policy import (
-    ActionNormalizer,
-    HRPSingleViewGaussianMixturePolicy,
-)
+from tcc_real_robot.policy import ActionNormalizer, TCCMLPGaussianMixturePolicy
 from tcc_real_robot.policy_runtime import resolve_device
-from tcc_real_robot.tcc_backbone import load_trainable_tcc_backbone
+from tcc_real_robot.tcc_backbone import load_independent_camera_backbones
 
 
 def action_targets(
@@ -50,7 +46,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--config",
         type=Path,
-        default=Path("configs/experiment_v8_hrp_official_single_view_60.yaml"),
+        default=Path("configs/experiment_v9_trossen_joint_delta_100.yaml"),
     )
     parser.add_argument("--image-buffer", type=Path, required=True)
     parser.add_argument("--backbone", default="hrp_imagenet")
@@ -64,7 +60,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--freeze-backbone",
         action="store_true",
-        help="Keep the visual backbone fixed and train only the HRP MLP-GMM head.",
+        help="Keep both visual backbones fixed and train only the MLP-GMM head.",
     )
     return parser.parse_args()
 
@@ -73,7 +69,7 @@ def save_checkpoint(
     path: Path,
     *,
     backbone: torch.nn.Module,
-    model: HRPSingleViewGaussianMixturePolicy,
+    model: TCCMLPGaussianMixturePolicy,
     config: dict,
     metadata: dict,
     state_normalizer: ActionNormalizer,
@@ -109,7 +105,7 @@ def save_checkpoint(
 @torch.inference_mode()
 def evaluate(
     backbone: torch.nn.Module,
-    model: HRPSingleViewGaussianMixturePolicy,
+    model: TCCMLPGaussianMixturePolicy,
     loader: DataLoader,
     state_normalizer: ActionNormalizer,
     action_normalizer: ActionNormalizer,
@@ -126,26 +122,29 @@ def evaluate(
     normalized_l2_total = 0.0
     sign_disagreement_total = 0.0
     count = 0
-    for images, states, actions, tasks in loader:
+    for main_images, wrist_images, states, actions, tasks in loader:
         remaining = max_samples - count
         if remaining <= 0:
             break
-        images = images[:remaining].to(device, non_blocking=True)
+        main_images = main_images[:remaining].to(device, non_blocking=True)
+        wrist_images = wrist_images[:remaining].to(device, non_blocking=True)
         states = states[:remaining].to(device, non_blocking=True)
         actions = actions[:remaining].to(device, non_blocking=True)
         tasks = tasks[:remaining].to(device, non_blocking=True)
         normalized_state = state_normalizer.normalize(states)
         target_actions = action_targets(actions, states, action_representation)
         target = action_normalizer.normalize(target_actions)
-        features = backbone(images).float()
+        main_features, wrist_features = backbone(main_images, wrist_images)
+        main_features = main_features.float()
+        wrist_features = wrist_features.float()
         loss = model.negative_log_likelihood(
-            target, features, None, tasks, normalized_state
+            target, main_features, wrist_features, tasks, normalized_state
         )
-        normalized_prediction = model.highest_probability_mean(
-            features, None, tasks, normalized_state
+        normalized_prediction = model(
+            main_features, wrist_features, tasks, normalized_state
         )
         prediction = action_normalizer.denormalize(normalized_prediction)
-        batch_count = images.shape[0]
+        batch_count = main_images.shape[0]
         loss_total += float(loss) * batch_count
         error_total += (
             float(torch.abs(prediction - target_actions).mean()) * batch_count
@@ -187,6 +186,7 @@ def main() -> None:
         tasks=[str(task) for task in config["dataset"]["tasks"]],
         episodes_per_task=int(config["dataset"]["demonstrations_per_task"]),
         frames_per_episode=int(config["evaluation"]["max_rollout_steps"]),
+        cameras=("cam_main", "cam_wrist"),
     )
     action_representation = str(policy_config["action_representation"])
     adapters = {
@@ -217,8 +217,12 @@ def main() -> None:
             "Training config is not the original joint-position contract: "
             f"{action_contract_mismatches}"
         )
-    if policy_config["cameras"] != ["cam_main"]:
-        raise ValueError("Official HRP reproduction requires cam_main only")
+    if policy_config["cameras"] != ["cam_main", "cam_wrist"]:
+        raise ValueError("V9 late fusion requires cam_main and cam_wrist")
+    if policy_config.get("shared_camera_backbone") is not False:
+        raise ValueError("V9 requires separately-parameterized camera backbones")
+    if policy_config.get("camera_fusion") != "project_then_concat":
+        raise ValueError("V9 requires project_then_concat late fusion")
     if policy_config.get("precision") != "float32":
         raise ValueError("Official HRP reproduction requires float32 training")
     device = resolve_device(args.device)
@@ -228,8 +232,8 @@ def main() -> None:
         cache_dir=args.hub_cache_dir,
         local_files_only=args.offline,
     )
-    backbone, metadata = load_trainable_tcc_backbone(
-        asset, args.tcc_source_root, device
+    backbone, metadata = load_independent_camera_backbones(
+        asset, args.tcc_source_root, device, trainable=True
     )
     if device.type == "cuda":
         torch.set_float32_matmul_precision("highest")
@@ -246,10 +250,10 @@ def main() -> None:
     eval_transform = build_hrp_image_transform(
         int(metadata["image_size"]), training=False
     )
-    all_train_views = HRPImageDataset(
+    all_train_views = HRPMultiViewImageDataset(
         args.image_buffer, "train", transform=train_transform
     )
-    all_eval_views = HRPImageDataset(
+    all_eval_views = HRPMultiViewImageDataset(
         args.image_buffer, "train", transform=eval_transform
     )
     split_config = config["split"]
@@ -290,14 +294,21 @@ def main() -> None:
         action_mean if bool(policy_config["normalize_actions"]) else identity_mean,
         action_std if bool(policy_config["normalize_actions"]) else identity_std,
     ).to(device)
-    model = HRPSingleViewGaussianMixturePolicy(
+    model = TCCMLPGaussianMixturePolicy(
         feature_dim=int(metadata["feature_dim"]),
+        num_tasks=int(policy_config["number_of_tasks"]),
         action_dim=int(policy_config["action_dim"]),
         hidden_dims=tuple(policy_config["hidden_dimensions"]),
-        state_dim=int(policy_config["proprioception_dim"]),
+        proprio_dim=int(policy_config["proprioception_dim"]),
         dropout=float(policy_config["dropout"]),
         num_modes=int(policy_config["num_modes"]),
         min_std=float(policy_config["min_std"]),
+        input_batch_norm=bool(policy_config["input_batch_norm"]),
+        input_layer_norm=bool(policy_config["input_layer_norm"]),
+        camera_names=tuple(policy_config["cameras"]),
+        camera_fusion=str(policy_config["camera_fusion"]),
+        camera_projection_dim=int(policy_config["camera_projection_dim"]),
+        camera_gate_hidden_dim=int(policy_config["camera_gate_hidden_dim"]),
     ).to(device)
     workers = (
         args.num_workers
@@ -354,14 +365,21 @@ def main() -> None:
         if test_data is not None
         else None
     )
-    optimized_parameters = (
-        chain(backbone.parameters(), model.parameters())
-        if train_backbone
-        else model.parameters()
-    )
+    parameter_groups: list[dict[str, object]] = [
+        {
+            "params": model.parameters(),
+            "lr": float(policy_config["learning_rate"]),
+        }
+    ]
+    if train_backbone:
+        parameter_groups.append(
+            {
+                "params": backbone.parameters(),
+                "lr": float(policy_config["backbone_learning_rate"]),
+            }
+        )
     optimizer = torch.optim.Adam(
-        optimized_parameters,
-        lr=float(policy_config["learning_rate"]),
+        parameter_groups,
         weight_decay=float(policy_config["weight_decay"]),
     )
     eval_every = int(policy_config["eval_every"])
@@ -382,21 +400,24 @@ def main() -> None:
         heldout_loss=float("nan"),
     )
     for step in range(1, iterations + 1):
-        images, states, actions, tasks = next(train_iterator)
-        images = images.to(device, non_blocking=True)
+        main_images, wrist_images, states, actions, tasks = next(train_iterator)
+        main_images = main_images.to(device, non_blocking=True)
+        wrist_images = wrist_images.to(device, non_blocking=True)
         states = states.to(device, non_blocking=True)
         actions = actions.to(device, non_blocking=True)
         tasks = tasks.to(device, non_blocking=True)
         if train_backbone:
-            features = backbone(images).float()
+            main_features, wrist_features = backbone(main_images, wrist_images)
         else:
             with torch.no_grad():
-                features = backbone(images).float()
+                main_features, wrist_features = backbone(main_images, wrist_images)
+        main_features = main_features.float()
+        wrist_features = wrist_features.float()
         targets = action_targets(actions, states, action_representation)
         loss = model.negative_log_likelihood(
             action_normalizer.normalize(targets),
-            features,
-            None,
+            main_features,
+            wrist_features,
             tasks,
             state_normalizer.normalize(states),
         )
@@ -471,6 +492,8 @@ def main() -> None:
         "state_normalization": bool(policy_config["normalize_state"]),
         "action_normalization": bool(policy_config["normalize_actions"]),
         "backbone_frozen": not train_backbone,
+        "camera_backbones": "independent",
+        "camera_fusion": "project_then_concat",
         "test": test_metrics,
     }
     (output_dir / "metrics.json").write_text(json.dumps(metrics, indent=2) + "\n")

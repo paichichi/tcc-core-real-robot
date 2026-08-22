@@ -466,7 +466,7 @@ def main() -> None:
         restore_policy_backbone,
         validate_policy_contract,
     )
-    from tcc_real_robot.tcc_backbone import load_frozen_tcc_backbone
+    from tcc_real_robot.tcc_backbone import load_policy_camera_backbones
 
     device = resolve_device(args.device)
     task_names = [str(value) for value in config["dataset"]["tasks"]]
@@ -535,8 +535,11 @@ def main() -> None:
             policy_sha256=sha256_file(policy_path),
             metrics_path=policy_path.with_name("metrics.json"),
         )
-    backbone, backbone_metadata = load_frozen_tcc_backbone(
-        assets.backbone_path, args.tcc_source_root, device
+    backbone, backbone_metadata = load_policy_camera_backbones(
+        assets.backbone_path,
+        args.tcc_source_root,
+        device,
+        config["policy"],
     )
     bundle = load_policy_bundle(
         assets.policy_path,

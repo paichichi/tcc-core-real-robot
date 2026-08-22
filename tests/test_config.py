@@ -377,7 +377,12 @@ def test_v9_is_trossen_native_joint_delta() -> None:
     config = load_yaml(ROOT / "configs" / "experiment_v9_trossen_joint_delta_100.yaml")
     policy = config["policy"]
 
-    assert policy["architecture"] == "hrp_state_token_gmm"
+    assert policy["architecture"] == "dual_encoder_mlp_gmm"
+    assert policy["architecture_reference"] == "robomimic_multiview_late_fusion"
+    assert policy["cameras"] == ["cam_main", "cam_wrist"]
+    assert policy["shared_camera_backbone"] is False
+    assert policy["camera_fusion"] == "project_then_concat"
+    assert policy["camera_projection_dim"] == 128
     assert policy["action_representation"] == "current_delta"
     assert policy["action_space"] == "joint_position"
     assert policy["action_frame"] == "joint"
@@ -387,6 +392,8 @@ def test_v9_is_trossen_native_joint_delta() -> None:
     assert policy["normalize_state"] is True
     assert policy["normalize_actions"] is True
     assert policy["learning_rate"] == 0.0001
+    assert policy["backbone_learning_rate"] == 0.00001
+    assert policy["batch_size"] == 32
     assert policy["training_steps"] == 50000
     assert policy["deterministic_inference"] == "highest_probability_mode_mean"
     assert config["model_hub"]["revision"] == (
