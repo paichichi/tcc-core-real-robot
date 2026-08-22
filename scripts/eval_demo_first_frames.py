@@ -31,6 +31,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--demonstrations", type=int, default=80)
     parser.add_argument("--task", default="carrot")
     parser.add_argument("--episodes", type=int, default=10)
+    parser.add_argument(
+        "--recorded-envelope-multiplier",
+        type=float,
+        default=2.0,
+        help=(
+            "Require predicted first-step deltas to remain within this multiple "
+            "of the largest recorded first-step delta."
+        ),
+    )
     parser.add_argument("--tcc-source-root", type=Path, required=True)
     parser.add_argument("--hub-cache-dir", type=Path)
     parser.add_argument("--offline", action="store_true")
@@ -80,6 +89,8 @@ def main() -> None:
     args = parse_args()
     if args.episodes <= 0:
         raise SystemExit("--episodes must be positive")
+    if args.recorded_envelope_multiplier <= 0:
+        raise SystemExit("--recorded-envelope-multiplier must be positive")
     config = load_yaml(args.config)
     robot_config = load_yaml(args.robot_config)
     dataset_root = resolve_dataset_root(config, args.dataset_root)
@@ -217,10 +228,34 @@ def main() -> None:
         row["comparison"].prediction_gripper_delta_m <= max_gripper_delta
         for row in rows
     )
+    recorded_arm_envelope = max(
+        row["comparison"].target_max_arm_delta_rad for row in rows
+    )
+    recorded_gripper_envelope = max(
+        row["comparison"].target_gripper_delta_m for row in rows
+    )
+    predicted_arm_envelope = max(
+        row["comparison"].prediction_max_arm_delta_rad for row in rows
+    )
+    predicted_gripper_envelope = max(
+        row["comparison"].prediction_gripper_delta_m for row in rows
+    )
+    arm_matches_recorded_envelope = predicted_arm_envelope <= (
+        args.recorded_envelope_multiplier * recorded_arm_envelope
+    )
+    gripper_matches_recorded_envelope = predicted_gripper_envelope <= (
+        args.recorded_envelope_multiplier * recorded_gripper_envelope
+    )
     checks = {
         "recorded_first_actions_are_safe": target_arm_safe and target_gripper_safe,
         "predicted_first_arm_actions_are_safe": prediction_arm_safe,
         "predicted_first_gripper_actions_are_safe": prediction_gripper_safe,
+        "predicted_arm_matches_recorded_first_step_envelope": (
+            arm_matches_recorded_envelope
+        ),
+        "predicted_gripper_matches_recorded_first_step_envelope": (
+            gripper_matches_recorded_envelope
+        ),
     }
     decision = "PASS" if all(checks.values()) else "BLOCKED"
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -243,6 +278,10 @@ def main() -> None:
             f"{'YES' if fine_tuned_backbone_restored else 'NO'}\n"
         )
         report.write(f"GMM inference override: {args.gmm_inference}\n")
+        report.write(
+            "Recorded envelope multiplier: "
+            f"{args.recorded_envelope_multiplier:.3f}\n"
+        )
         report.write(f"Device: {device}\n\n")
         for row in rows:
             comparison = row["comparison"]
@@ -281,6 +320,15 @@ def main() -> None:
         report.write(
             f"Prediction action MAE median/max: {np.median(action_maes):.7f} / "
             f"{max(action_maes):.7f}\n"
+        )
+        report.write(
+            "Recorded/predicted arm first-step envelope: "
+            f"{recorded_arm_envelope:.7f} / {predicted_arm_envelope:.7f} rad\n"
+        )
+        report.write(
+            "Recorded/predicted gripper first-step envelope: "
+            f"{recorded_gripper_envelope:.7f} / "
+            f"{predicted_gripper_envelope:.7f} m\n"
         )
         report.write("Checks:\n")
         for name, passed in checks.items():
