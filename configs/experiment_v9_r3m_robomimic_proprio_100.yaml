@@ -28,11 +28,11 @@ backbone:
 
 model_hub:
   repository: Chipaipai/tcc-core-real-robot-policies
-  revision: dfbc7a76194d4aad41c06441dd2d7e4abce397cc
+  revision: 59eaf7c32669910b2837a0821cf51b5ed2286401
   backbone_manifest: backbones/manifest.json
-  policy_checkpoint_template: policies_v9_r3m_robomimic_proprio/{backbone}/checkpoint_050000.pt
-  policy_metrics_template: policies_v9_r3m_robomimic_proprio/{backbone}/metrics.json
-  supported_backbones: [ours_rn50, ours_vit, r3m_unadapted, d4r_imagenet]
+  policy_checkpoint_template: policies_v9_r3m_robomimic_proprio/{backbone}/i10000_closed_loop/checkpoint_010000.pt
+  policy_metrics_template: policies_v9_r3m_robomimic_proprio/{backbone}/i10000_closed_loop/metrics.json
+  supported_backbones: [ours_rn50]
   supported_demonstrations: [100]
 
 policy:

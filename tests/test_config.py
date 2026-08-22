@@ -364,3 +364,10 @@ def test_v9_proprio_adds_closed_loop_state_without_changing_action_contract() ->
     assert config["model_hub"]["policy_checkpoint_template"].startswith(
         "policies_v9_r3m_robomimic_proprio/"
     )
+    assert config["model_hub"]["revision"] == (
+        "59eaf7c32669910b2837a0821cf51b5ed2286401"
+    )
+    assert config["model_hub"]["policy_checkpoint_template"].endswith(
+        "i10000_closed_loop/checkpoint_010000.pt"
+    )
+    assert config["model_hub"]["supported_backbones"] == ["ours_rn50"]
