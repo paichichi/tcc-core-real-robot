@@ -395,20 +395,26 @@ def predict_action(
                 "gmm_inference_override must be None or "
                 "'highest-probability-mode'"
             )
+        deterministic_checkpoint_inference = policy_config.get(
+            "deterministic_inference"
+        ) in {"highest_probability_mode_mean", "highest-probability-mode"}
         if (
-            gmm_inference_override == "highest-probability-mode"
+            (
+                gmm_inference_override == "highest-probability-mode"
+                or (
+                    gmm_inference_override is None
+                    and deterministic_checkpoint_inference
+                )
+            )
             and isinstance(bundle.model, HRPSingleViewGaussianMixturePolicy)
         ):
-            means, _, logits = bundle.model.mixture_parameters(
+            normalized_action = bundle.model.highest_probability_mean(
                 cam_main_features,
                 cam_wrist_features,
                 task_tensor,
                 normalized_state,
                 progress,
             )
-            modes = torch.argmax(logits, dim=-1)
-            batch = torch.arange(means.shape[0], device=means.device)
-            normalized_action = means[batch, modes]
         else:
             normalized_action = bundle.model(
                 cam_main_features,

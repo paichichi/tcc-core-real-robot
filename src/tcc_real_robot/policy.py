@@ -449,6 +449,22 @@ class HRPSingleViewGaussianMixturePolicy(nn.Module):
         batch = torch.arange(means.shape[0], device=means.device)
         return means[batch, modes]
 
+    def highest_probability_mean(
+        self,
+        cam_main: torch.Tensor,
+        cam_wrist: torch.Tensor | None,
+        task_index: torch.Tensor,
+        proprioception: torch.Tensor | None = None,
+        progress: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Return the mean of the most probable GMM mode for deployment."""
+        means, _, logits = self.mixture_parameters(
+            cam_main, cam_wrist, task_index, proprioception, progress
+        )
+        modes = torch.argmax(logits, dim=-1)
+        batch = torch.arange(means.shape[0], device=means.device)
+        return means[batch, modes]
+
     def negative_log_likelihood(
         self,
         target: torch.Tensor,

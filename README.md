@@ -1,30 +1,38 @@
 # Real-Robot Policy Training and Evaluation
 
-## 当前实验：R3M-style behavior cloning + Trossen driver
+## 当前实验：V9 HRP-style policy + Trossen-native joint control
 
-本项目参考 Meta R3M 的公开 evaluation/behavior-cloning 工程设计训练 policy head，
-但不使用 R3M 的环境或机器人驱动。执行层仍是已经实机验证的 Trossen 官方 Python
-driver adapter：policy 只输出动作，driver adapter 负责 home、模式切换、20 Hz
-非阻塞 position command、tracking 检查和退出时回到 idle。
+当前配置为 `configs/experiment_v9_trossen_joint_delta_100.yaml`。视觉和 policy
+训练沿用 HRP release 的单视角、端到端 backbone、`[512, 512]` MLP-GMM 配方；
+机器人动作语义严格服从本数据集和 Trossen follower driver，不切换到 Cartesian
+velocity，也不引入 IK。
 
-当前配置是 `configs/experiment_v6_gated_multiview_proprio_60.yaml`：冻结共享的双
-摄像头 backbone，分别将 `cam_main` 和 `cam_wrist` 特征投影到 128 维。由两路投影
-特征、归一化 7-D proprioception 和 one-hot task ID 共同产生逐通道 wrist gate，
-视觉融合为 `main + gate * wrist`，再送入 `[256, 256] + ReLU` MLP。它避免把两个
-高维 backbone 向量直接拼接给 MLP，同时保留主相机的全局信息和腕部相机的近距离
-修正信息。输出层初始参数缩放 `0.01`；Adam、MSE、学习率 `1e-3`、batch size
-`32`、训练 `50K` steps。
+数据集原始 `action[t]` 是 6 维关节目标（rad）加 1 维夹爪目标（m），而
+`observation.state[t]` 是同一时刻的实测位置。V9 学习：
 
-两处是针对本数据集的必要适配：输出保持数据集/replay 已验证的 7-D absolute
-joint/gripper action，并使用 train split 的逐维 action 标准化，避免弧度关节和米制
-夹爪的量纲差异。每条 demo 是 20 Hz、359 帧，因此 rollout 上限保持 359；这不是
-action chunk，policy 每帧仍只预测一个动作。
+```text
+delta[t] = action[t] - observation.state[t]
+absolute_target[t] = latest_measured_state[t] + predicted_delta[t]
+```
 
-完整缓存和训练命令统一放在 `LINUX_COMMANDS.txt`。V6 首先训练 `ours_rn50` 和
-`ours_vit`；训练 metrics 中的 main/wrist camera shuffle action delta 用于确认两路
-视角都实际影响 policy。部署本地训练 checkpoint 时必须显式传入
-`--policy-checkpoint`。R3M 风格训练代码与 Trossen driver 之间没有直接依赖，唯一
-接口是 denormalized 7-D action。
+运行时只把还原后的 7 维绝对位置交给已有安全层，随后使用 Trossen 官方 Python
+API `set_all_positions(target, goal_time, False)` 以 20 Hz 非阻塞下发。控制路径仍
+检查数据集绝对动作范围、逐步变化、command lead、controller joint limits、跟踪
+误差和实测速度；退出时恢复 Idle。代码不会把 joint-delta checkpoint 送到
+Cartesian 或 velocity driver。
+
+V9 还修正了 V8 暴露出的三个训练问题：按完整 episode 做 80/10/10 划分，避免同一
+demo 的帧同时进入 train 和 validation；使用 train episode 的 state/delta 统计量；
+将每个 episode 前 5 帧提高到 10 倍采样权重，直接约束从 dataset home 起步的行为。
+部署固定使用最高概率 GMM 分量的均值，避免同一画面因类别采样产生随机动作。训练
+为 50K steps、Adam `1e-4`、weight decay `1e-4`、batch size 150，并端到端微调
+backbone。
+
+完整训练和本地 checkpoint 离线闸门命令放在 `LINUX_COMMANDS.txt`。首帧诊断会
+比较预测绝对目标与 demo 记录目标；超过记录首步 envelope 的模型会得到
+`Decision: BLOCKED`，不应进入实机 rollout。
+
+## 历史实验：V6 R3M-style behavior cloning
 
 ## 上一版实验：v3 proprioception + absolute action
 

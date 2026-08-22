@@ -13,12 +13,14 @@ from pathlib import Path
 import numpy as np
 import torch
 import yaml
-from torch.utils.data import DataLoader, RandomSampler, Subset
+from torch.utils.data import DataLoader, RandomSampler, Subset, WeightedRandomSampler
 
 from tcc_real_robot.hrp_image_data import (
     HRPImageDataset,
+    episode_level_transition_split,
     official_hrp_transition_split,
     require_complete_joint_position_buffer,
+    start_weighted_transition_weights,
 )
 from tcc_real_robot.hrp_vision import build_hrp_image_transform
 from tcc_real_robot.model_assets import resolve_backbone_asset
@@ -28,6 +30,19 @@ from tcc_real_robot.policy import (
 )
 from tcc_real_robot.policy_runtime import resolve_device
 from tcc_real_robot.tcc_backbone import load_trainable_tcc_backbone
+
+
+def action_targets(
+    actions: torch.Tensor,
+    states: torch.Tensor,
+    action_representation: str,
+) -> torch.Tensor:
+    """Convert raw Trossen position commands into the configured BC target."""
+    if action_representation == "absolute":
+        return actions
+    if action_representation == "current_delta":
+        return actions - states
+    raise ValueError(f"Unsupported Trossen action representation: {action_representation}")
 
 
 def parse_args() -> argparse.Namespace:
@@ -100,6 +115,7 @@ def evaluate(
     action_normalizer: ActionNormalizer,
     device: torch.device,
     max_samples: int,
+    action_representation: str,
     *,
     train_backbone: bool,
 ) -> tuple[float, float, float, float]:
@@ -119,16 +135,21 @@ def evaluate(
         actions = actions[:remaining].to(device, non_blocking=True)
         tasks = tasks[:remaining].to(device, non_blocking=True)
         normalized_state = state_normalizer.normalize(states)
-        target = action_normalizer.normalize(actions)
+        target_actions = action_targets(actions, states, action_representation)
+        target = action_normalizer.normalize(target_actions)
         features = backbone(images).float()
         loss = model.negative_log_likelihood(
             target, features, None, tasks, normalized_state
         )
-        normalized_prediction = model(features, None, tasks, normalized_state)
+        normalized_prediction = model.highest_probability_mean(
+            features, None, tasks, normalized_state
+        )
         prediction = action_normalizer.denormalize(normalized_prediction)
         batch_count = images.shape[0]
         loss_total += float(loss) * batch_count
-        error_total += float(torch.abs(prediction - actions).mean()) * batch_count
+        error_total += (
+            float(torch.abs(prediction - target_actions).mean()) * batch_count
+        )
         normalized_l2_total += (
             float(torch.square(normalized_prediction - target).mean()) * batch_count
         )
@@ -167,13 +188,24 @@ def main() -> None:
         episodes_per_task=int(config["dataset"]["demonstrations_per_task"]),
         frames_per_episode=int(config["evaluation"]["max_rollout_steps"]),
     )
+    action_representation = str(policy_config["action_representation"])
+    adapters = {
+        "absolute": "trossen_joint_position_passthrough",
+        "current_delta": "current_state_plus_joint_delta_to_position",
+    }
+    if action_representation not in adapters:
+        raise ValueError(
+            f"Unsupported Trossen action representation: {action_representation}"
+        )
     required_action_contract = {
-        "action_representation": "absolute",
+        "action_representation": action_representation,
         "action_space": "joint_position",
-        "action_adapter": "trossen_joint_position_passthrough",
+        "action_adapter": adapters[action_representation],
         "state_representation": "measured_joint_position",
         "action_source": "original_lerobot_action",
-        "gripper_action": "position",
+        "gripper_action": (
+            "position" if action_representation == "absolute" else "position_delta"
+        ),
     }
     action_contract_mismatches = {
         key: (policy_config.get(key), value)
@@ -221,19 +253,34 @@ def main() -> None:
         args.image_buffer, "train", transform=eval_transform
     )
     split_config = config["split"]
-    if split_config["protocol"] != "hrp_fixed_transition_holdout":
-        raise ValueError("Official HRP training requires its transition holdout")
-    train_indices, heldout_indices = official_hrp_transition_split(
-        len(all_train_views),
-        held_out_transitions=int(split_config["held_out_transitions"]),
-        shuffle_seed=int(split_config["shuffle_seed"]),
-    )
+    test_indices: list[int] = []
+    if split_config["protocol"] == "hrp_fixed_transition_holdout":
+        train_indices, heldout_indices = official_hrp_transition_split(
+            len(all_train_views),
+            held_out_transitions=int(split_config["held_out_transitions"]),
+            shuffle_seed=int(split_config["shuffle_seed"]),
+        )
+    elif split_config["protocol"] == "trossen_episode_holdout":
+        train_indices, heldout_indices, test_indices = episode_level_transition_split(
+            args.image_buffer,
+            train_episodes_per_task=int(split_config["train_episodes_per_task"]),
+            validation_episodes_per_task=int(
+                split_config["validation_episodes_per_task"]
+            ),
+            test_episodes_per_task=int(split_config["test_episodes_per_task"]),
+            shuffle_seed=int(split_config["shuffle_seed"]),
+        )
+    else:
+        raise ValueError(f"Unsupported split protocol: {split_config['protocol']}")
     train_data = Subset(all_train_views, train_indices)
     heldout_data = Subset(all_eval_views, heldout_indices)
+    test_data = Subset(all_eval_views, test_indices) if test_indices else None
     identity_mean = torch.zeros(int(policy_config["action_dim"]))
     identity_std = torch.ones(int(policy_config["action_dim"]))
     state_mean, state_std, action_mean, action_std = (
-        all_train_views.state_action_statistics(train_indices)
+        all_train_views.state_action_statistics(
+            train_indices, action_representation=action_representation
+        )
     )
     state_normalizer = ActionNormalizer(
         state_mean if bool(policy_config["normalize_state"]) else identity_mean,
@@ -259,12 +306,29 @@ def main() -> None:
     )
     batch_size = int(policy_config["batch_size"])
     iterations = args.iterations or int(policy_config["training_steps"])
-    train_sampler = RandomSampler(
-        train_data,
-        replacement=True,
-        num_samples=iterations * batch_size,
-        generator=torch.Generator().manual_seed(seed),
-    )
+    sampling_config = config.get("sampling")
+    if sampling_config is None:
+        train_sampler = RandomSampler(
+            train_data,
+            replacement=True,
+            num_samples=iterations * batch_size,
+            generator=torch.Generator().manual_seed(seed),
+        )
+    elif sampling_config.get("protocol") == "trossen_start_weighted":
+        weights = start_weighted_transition_weights(
+            args.image_buffer,
+            train_indices,
+            start_frames=int(sampling_config["start_frames"]),
+            start_weight=float(sampling_config["start_weight"]),
+        )
+        train_sampler = WeightedRandomSampler(
+            weights,
+            num_samples=iterations * batch_size,
+            replacement=True,
+            generator=torch.Generator().manual_seed(seed),
+        )
+    else:
+        raise ValueError(f"Unsupported sampling protocol: {sampling_config}")
     train_loader = DataLoader(
         train_data,
         batch_size=batch_size,
@@ -280,6 +344,16 @@ def main() -> None:
         shuffle=False,
         num_workers=min(workers, 4),
     )
+    test_loader = (
+        DataLoader(
+            test_data,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=min(workers, 4),
+        )
+        if test_data is not None
+        else None
+    )
     optimized_parameters = (
         chain(backbone.parameters(), model.parameters())
         if train_backbone
@@ -291,7 +365,7 @@ def main() -> None:
         weight_decay=float(policy_config["weight_decay"]),
     )
     eval_every = int(policy_config["eval_every"])
-    heldout_samples = int(split_config["held_out_transitions"])
+    heldout_samples = len(heldout_indices)
     output_dir = args.output_dir.expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     history = []
@@ -318,8 +392,9 @@ def main() -> None:
         else:
             with torch.no_grad():
                 features = backbone(images).float()
+        targets = action_targets(actions, states, action_representation)
         loss = model.negative_log_likelihood(
-            action_normalizer.normalize(actions),
+            action_normalizer.normalize(targets),
             features,
             None,
             tasks,
@@ -339,6 +414,7 @@ def main() -> None:
                 action_normalizer,
                 device,
                 heldout_samples,
+                action_representation,
                 train_backbone=train_backbone,
             )
             row = {
@@ -346,7 +422,7 @@ def main() -> None:
                 "heldout_normalized_gmm_nll": heldout_loss,
                 "heldout_normalized_action_l2": heldout_l2,
                 "heldout_normalized_sign_disagreement": heldout_lsig,
-                "heldout_joint_position_mae": heldout_mae,
+                "heldout_action_mae": heldout_mae,
             }
             history.append(row)
             print(json.dumps(row, sort_keys=True))
@@ -365,15 +441,37 @@ def main() -> None:
         output_dir / f"checkpoint_{iterations:06d}.pt",
         output_dir / "checkpoint_last.pt",
     )
+    test_metrics = None
+    if test_loader is not None:
+        test_loss, test_l2, test_lsig, test_mae = evaluate(
+            backbone,
+            model,
+            test_loader,
+            state_normalizer,
+            action_normalizer,
+            device,
+            len(test_indices),
+            action_representation,
+            train_backbone=train_backbone,
+        )
+        test_metrics = {
+            "normalized_gmm_nll": test_loss,
+            "normalized_action_l2": test_l2,
+            "normalized_sign_disagreement": test_lsig,
+            "action_mae": test_mae,
+        }
     metrics = {
         "history": history,
         "split_protocol": split_config,
         "train_transitions": len(train_indices),
         "heldout_transitions": len(heldout_indices),
+        "test_transitions": len(test_indices),
         "training_iterations": iterations,
+        "action_representation": action_representation,
         "state_normalization": bool(policy_config["normalize_state"]),
         "action_normalization": bool(policy_config["normalize_actions"]),
         "backbone_frozen": not train_backbone,
+        "test": test_metrics,
     }
     (output_dir / "metrics.json").write_text(json.dumps(metrics, indent=2) + "\n")
 

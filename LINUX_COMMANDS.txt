@@ -4,10 +4,28 @@ cd ~/tcc-core-real-robot
 source .venv/bin/activate
 
 
-hf download UoA-Trossen-Arm/pick_and_place_4_object_diverse --repo-type dataset --revision 6ce893dc73fc6310ccbd46786f71a03a5b6a3da2 --local-dir datasets/pick_and_place_4_object_diverse
+python scripts/cache_hrp_images.py --config configs/experiment_v9_trossen_joint_delta_100.yaml --output runs/hrp_image_buffer_carrot_joint_position.sqlite3
 
 
-test -f datasets/pick_and_place_4_object_diverse/pick_and_place_carrot_100/meta/episodes.jsonl && echo DATASET_READY || echo DATASET_INCOMPLETE
+python scripts/train_hrp_end_to_end.py --config configs/experiment_v9_trossen_joint_delta_100.yaml --image-buffer runs/hrp_image_buffer_carrot_joint_position.sqlite3 --backbone ours_rn50 --offline --tcc-source-root /home/robotarm/TCC-core --output-dir runs/v9_trossen_joint_delta/ours_rn50 --device cuda:0
 
 
-find datasets/pick_and_place_4_object_diverse -type f | wc -l
+python scripts/eval_demo_first_frames.py --config configs/experiment_v9_trossen_joint_delta_100.yaml --backbone ours_rn50 --demonstrations 100 --policy-checkpoint runs/v9_trossen_joint_delta/ours_rn50/checkpoint_050000.pt --task carrot --episodes 20 --tcc-source-root /home/robotarm/TCC-core --offline --device cuda:0
+
+
+python scripts/train_hrp_end_to_end.py --config configs/experiment_v9_trossen_joint_delta_100.yaml --image-buffer runs/hrp_image_buffer_carrot_joint_position.sqlite3 --backbone ours_vit --offline --tcc-source-root /home/robotarm/TCC-core --output-dir runs/v9_trossen_joint_delta/ours_vit --device cuda:0
+
+
+python scripts/eval_demo_first_frames.py --config configs/experiment_v9_trossen_joint_delta_100.yaml --backbone ours_vit --demonstrations 100 --policy-checkpoint runs/v9_trossen_joint_delta/ours_vit/checkpoint_050000.pt --task carrot --episodes 20 --tcc-source-root /home/robotarm/TCC-core --offline --device cuda:0
+
+
+python scripts/train_hrp_end_to_end.py --config configs/experiment_v9_trossen_joint_delta_100.yaml --image-buffer runs/hrp_image_buffer_carrot_joint_position.sqlite3 --backbone r3m_unadapted --offline --tcc-source-root /home/robotarm/TCC-core --output-dir runs/v9_trossen_joint_delta/r3m_unadapted --device cuda:0
+
+
+python scripts/eval_demo_first_frames.py --config configs/experiment_v9_trossen_joint_delta_100.yaml --backbone r3m_unadapted --demonstrations 100 --policy-checkpoint runs/v9_trossen_joint_delta/r3m_unadapted/checkpoint_050000.pt --task carrot --episodes 20 --tcc-source-root /home/robotarm/TCC-core --offline --device cuda:0
+
+
+python scripts/train_hrp_end_to_end.py --config configs/experiment_v9_trossen_joint_delta_100.yaml --image-buffer runs/hrp_image_buffer_carrot_joint_position.sqlite3 --backbone d4r_imagenet --offline --tcc-source-root /home/robotarm/TCC-core --output-dir runs/v9_trossen_joint_delta/d4r_imagenet --device cuda:0
+
+
+python scripts/eval_demo_first_frames.py --config configs/experiment_v9_trossen_joint_delta_100.yaml --backbone d4r_imagenet --demonstrations 100 --policy-checkpoint runs/v9_trossen_joint_delta/d4r_imagenet/checkpoint_050000.pt --task carrot --episodes 20 --tcc-source-root /home/robotarm/TCC-core --offline --device cuda:0

@@ -373,10 +373,20 @@ def validate_joint_position_driver_contract(
         for key, value in expected.items()
         if driver.get(key) != value
     }
-    if policy.get("action_representation") != "absolute":
+    representation = policy.get("action_representation")
+    expected_adapters = {
+        "absolute": "trossen_joint_position_passthrough",
+        "current_delta": "current_state_plus_joint_delta_to_position",
+    }
+    if representation not in expected_adapters:
         mismatches["policy.action_representation"] = (
-            policy.get("action_representation"),
-            "absolute",
+            representation,
+            sorted(expected_adapters),
+        )
+    elif policy.get("action_adapter") != expected_adapters[representation]:
+        mismatches["policy.action_adapter"] = (
+            policy.get("action_adapter"),
+            expected_adapters[representation],
         )
     control_fps = float(robot_config["policy_evaluation"]["clipped_rollout"]["control_fps"])
     observation_fps = float(experiment_config["observations"]["fps"])

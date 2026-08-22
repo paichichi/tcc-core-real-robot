@@ -200,6 +200,7 @@ def hrp_single_view_checkpoint_payload() -> dict:
                 "hidden_dimensions": [4, 4],
                 "dropout": 0.0,
                 "precision": "float32",
+                "deterministic_inference": "highest_probability_mode_mean",
                 "proprioception": True,
                 "proprioception_dim": 7,
                 "cameras": ["cam_main"],
@@ -479,6 +480,55 @@ def test_hrp_single_view_can_use_highest_probability_mode(tmp_path: Path) -> Non
     )
 
     assert torch.allclose(action, torch.full((7,), 0.25))
+
+
+def test_hrp_checkpoint_can_require_deterministic_inference(tmp_path: Path) -> None:
+    checkpoint = tmp_path / "hrp_deterministic.pt"
+    torch.save(hrp_single_view_checkpoint_payload(), checkpoint)
+    bundle = load_policy_bundle(
+        checkpoint, expected_feature_dim=3, device=torch.device("cpu")
+    )
+    frame = np.zeros((48, 64, 3), dtype=np.uint8)
+
+    action = predict_action(
+        MeanBackbone().eval(),
+        bundle,
+        frame,
+        frame,
+        task_index=0,
+        image_size=32,
+        device=torch.device("cpu"),
+        observation_state=np.zeros(7, dtype=np.float32),
+    )
+
+    assert torch.allclose(action, torch.full((7,), 0.25))
+
+
+def test_hrp_single_view_delta_is_reconstructed_as_absolute_target(
+    tmp_path: Path,
+) -> None:
+    checkpoint = tmp_path / "hrp_delta.pt"
+    payload = hrp_single_view_checkpoint_payload()
+    payload["config"]["policy"]["action_representation"] = "current_delta"
+    torch.save(payload, checkpoint)
+    bundle = load_policy_bundle(
+        checkpoint, expected_feature_dim=3, device=torch.device("cpu")
+    )
+    frame = np.zeros((48, 64, 3), dtype=np.uint8)
+    state = np.arange(7, dtype=np.float32)
+
+    action = predict_action(
+        MeanBackbone().eval(),
+        bundle,
+        frame,
+        frame,
+        task_index=0,
+        image_size=32,
+        device=torch.device("cpu"),
+        observation_state=state,
+    )
+
+    assert torch.allclose(action, torch.from_numpy(state) + 0.25)
 
 
 def test_end_to_end_checkpoint_restores_fine_tuned_backbone() -> None:

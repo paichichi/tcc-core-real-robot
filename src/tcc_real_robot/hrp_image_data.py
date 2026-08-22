@@ -184,6 +184,83 @@ def official_hrp_transition_split(
     return indices[held_out_transitions:], indices[:held_out_transitions]
 
 
+def episode_level_transition_split(
+    database: str | Path,
+    *,
+    train_episodes_per_task: int,
+    validation_episodes_per_task: int,
+    test_episodes_per_task: int,
+    shuffle_seed: int,
+) -> tuple[list[int], list[int], list[int]]:
+    """Split transition positions by whole episodes with no frame leakage."""
+    sizes = (
+        train_episodes_per_task,
+        validation_episodes_per_task,
+        test_episodes_per_task,
+    )
+    if any(size < 0 for size in sizes) or min(sizes) <= 0:
+        raise ValueError("Episode split sizes must all be positive")
+    path = Path(database).expanduser().resolve()
+    with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as connection:
+        rows = [
+            (int(task), int(episode))
+            for task, episode in connection.execute(
+                "SELECT task_index, episode_index FROM samples "
+                "WHERE split = 'train' ORDER BY id"
+            )
+        ]
+    episodes_by_task: dict[int, list[int]] = {}
+    for task, episode in rows:
+        if episode not in episodes_by_task.setdefault(task, []):
+            episodes_by_task[task].append(episode)
+    episode_splits: list[set[tuple[int, int]]] = [set(), set(), set()]
+    for task, episodes in sorted(episodes_by_task.items()):
+        if sum(sizes) != len(episodes):
+            raise ValueError(
+                f"Episode split sizes {sizes} do not exhaust task {task}: "
+                f"{len(episodes)} episodes"
+            )
+        shuffled = episodes.copy()
+        random.Random(shuffle_seed + task).shuffle(shuffled)
+        offset = 0
+        for selected, size in zip(episode_splits, sizes):
+            selected.update((task, episode) for episode in shuffled[offset : offset + size])
+            offset += size
+    transition_splits = [[], [], []]
+    for position, pair in enumerate(rows):
+        matches = [index for index, selected in enumerate(episode_splits) if pair in selected]
+        if len(matches) != 1:
+            raise RuntimeError(f"Transition episode has invalid split membership: {pair}")
+        transition_splits[matches[0]].append(position)
+    return tuple(transition_splits)  # type: ignore[return-value]
+
+
+def start_weighted_transition_weights(
+    database: str | Path,
+    indices: Sequence[int],
+    *,
+    start_frames: int,
+    start_weight: float,
+) -> torch.Tensor:
+    """Return subset-local sampling weights that emphasize episode starts."""
+    if start_frames <= 0 or start_weight < 1.0:
+        raise ValueError("Start sampling requires positive frames and weight >= 1")
+    path = Path(database).expanduser().resolve()
+    with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as connection:
+        frame_indices = [
+            int(row[0])
+            for row in connection.execute(
+                "SELECT frame_index FROM samples WHERE split = 'train' ORDER BY id"
+            )
+        ]
+    if any(index < 0 or index >= len(frame_indices) for index in indices):
+        raise IndexError("Sampling-weight index is outside the image buffer")
+    return torch.tensor(
+        [start_weight if frame_indices[index] < start_frames else 1.0 for index in indices],
+        dtype=torch.double,
+    )
+
+
 class HRPImageDataset(Dataset[tuple[torch.Tensor, ...]]):
     """Random-access JPEG observations without freezing visual features."""
 
@@ -250,7 +327,10 @@ class HRPImageDataset(Dataset[tuple[torch.Tensor, ...]]):
         return image, state, action, torch.tensor(int(task_index))
 
     def state_action_statistics(
-        self, indices: Sequence[int] | None = None
+        self,
+        indices: Sequence[int] | None = None,
+        *,
+        action_representation: str = "absolute",
     ) -> tuple[torch.Tensor, ...]:
         """Compute statistics from only the selected dataset rows.
 
@@ -277,7 +357,14 @@ class HRPImageDataset(Dataset[tuple[torch.Tensor, ...]]):
                 state = np.frombuffer(state_bytes, dtype=np.float32).copy()
                 action = np.frombuffer(action_bytes, dtype=np.float32).copy()
                 states.append(state)
-                actions.append(action)
+                if action_representation == "absolute":
+                    actions.append(action)
+                elif action_representation == "current_delta":
+                    actions.append(action - state)
+                else:
+                    raise ValueError(
+                        f"Unsupported action representation: {action_representation}"
+                    )
         if not states:
             raise ValueError("Statistics selection contains no samples")
         state_tensor = torch.from_numpy(np.stack(states))

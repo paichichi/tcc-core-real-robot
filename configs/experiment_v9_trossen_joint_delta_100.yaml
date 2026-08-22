@@ -1,0 +1,116 @@
+project: tcc-core-real-robot
+seed: 292285
+
+dataset:
+  repository: UoA-Trossen-Arm/pick_and_place_4_object_diverse
+  revision: 6ce893dc73fc6310ccbd46786f71a03a5b6a3da2
+  local_root: datasets/pick_and_place_4_object_diverse
+  demonstrations_per_task: 100
+  state_semantics: measured_joint_position_6_plus_gripper
+  action_semantics: commanded_joint_position_6_plus_gripper
+  action_source: original_lerobot_action_column
+  action_leads_measured_state_frames: 2
+  tasks:
+    - pick_and_place_carrot_100
+
+observations:
+  fps: 20
+  cameras: [cam_main]
+  resolution: [640, 480]
+
+backbone:
+  source: huggingface
+  hub_name: hrp_imagenet
+  checkpoint: null
+  tcc_source_root: TBD
+  frozen: false
+  fine_tuning: full_end_to_end
+  image_size: 224
+
+model_hub:
+  repository: Chipaipai/tcc-core-real-robot-policies
+  # Reuse the immutable V8 snapshot for the four source backbones during V9
+  # training. Replace this with the immutable V9 snapshot after upload.
+  revision: dfbc7a76194d4aad41c06441dd2d7e4abce397cc
+  backbone_manifest: backbones/manifest.json
+  policy_checkpoint_template: policies_v9_trossen_joint_delta/{backbone}/checkpoint_050000.pt
+  policy_metrics_template: policies_v9_trossen_joint_delta/{backbone}/metrics.json
+  supported_backbones: [ours_rn50, ours_vit, r3m_unadapted, d4r_imagenet]
+  supported_demonstrations: [100]
+
+policy:
+  implementation: tcc_mlp_bc_v9_trossen_joint_delta
+  architecture: hrp_state_token_gmm
+  architecture_reference: data4robotics_hrp_release_default
+  action_adapter: current_state_plus_joint_delta_to_position
+  cameras: [cam_main]
+  shared_camera_backbone: false
+  camera_fusion: raw_concat
+  camera_projection_dim: 0
+  camera_gate_hidden_dim: 0
+  task_conditioning: null
+  number_of_tasks: 1
+  proprioception: true
+  proprioception_dim: 7
+  progress_conditioning: null
+  progress_dim: 0
+  action_dim: 7
+  action_chunk_size: 1
+  # The source dataset remains absolute joint commands. The training target is
+  # action[t] - measured_state[t]. Runtime reconstructs an absolute goal from
+  # the fresh measured state before calling Trossen set_all_positions.
+  action_representation: current_delta
+  action_space: joint_position
+  action_frame: joint
+  state_representation: measured_joint_position
+  action_source: original_lerobot_action
+  action_leads_measured_state_frames: 2
+  gripper_action: position_delta
+  action_distribution: gaussian_mixture
+  num_modes: 5
+  min_std: 0.0001
+  deterministic_inference: highest_probability_mode_mean
+  inference: highest_probability_mode_mean
+  hidden_dimensions: [512, 512]
+  activation: relu
+  dropout: 0.2
+  input_batch_norm: true
+  input_layer_norm: false
+  output_layer_scale: 1.0
+  normalize_state: true
+  normalize_actions: true
+  optimizer: adam
+  weight_decay: 0.0001
+  loss: gmm_nll
+  training_steps: 50000
+  batch_size: 150
+  learning_rate: 0.0001
+  precision: float32
+  num_workers: 10
+  eval_every: 5000
+  evaluation_samples: 3590
+
+augmentation:
+  name: hrp_release_medium
+  random_resized_crop_scale: [0.9, 1.0]
+  random_resized_crop_ratio: [0.75, 1.3333333333333333]
+  color_jitter_probability: 0.0
+  gaussian_blur: true
+  gaussian_blur_probability: 1.0
+  imagenet_normalization: true
+
+sampling:
+  protocol: trossen_start_weighted
+  start_frames: 5
+  start_weight: 10.0
+
+evaluation:
+  max_rollout_steps: 359
+  first_frame_recorded_envelope_multiplier: 2.0
+
+split:
+  protocol: trossen_episode_holdout
+  shuffle_seed: 3904767649
+  train_episodes_per_task: 80
+  validation_episodes_per_task: 10
+  test_episodes_per_task: 10

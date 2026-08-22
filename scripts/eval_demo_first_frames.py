@@ -12,7 +12,12 @@ import numpy as np
 import pyarrow.parquet as pq
 
 from tcc_real_robot.config import load_yaml
-from tcc_real_robot.model_assets import resolve_model_assets
+from tcc_real_robot.model_assets import (
+    ResolvedModelAssets,
+    resolve_backbone_asset,
+    resolve_model_assets,
+    sha256_file,
+)
 from tcc_real_robot.offline_eval import compare_first_frame
 from tcc_real_robot.policy_data import build_episode_records
 
@@ -29,6 +34,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset-root", type=Path)
     parser.add_argument("--backbone", default="ours_rn50")
     parser.add_argument("--demonstrations", type=int, default=80)
+    parser.add_argument(
+        "--policy-checkpoint",
+        type=Path,
+        help="Evaluate a local policy checkpoint with the pinned Hub backbone.",
+    )
     parser.add_argument("--task", default="carrot")
     parser.add_argument("--episodes", type=int, default=10)
     parser.add_argument(
@@ -147,13 +157,36 @@ def main() -> None:
     from tcc_real_robot.tcc_backbone import load_frozen_tcc_backbone
 
     device = resolve_device(args.device)
-    assets = resolve_model_assets(
-        config,
-        args.backbone,
-        args.demonstrations,
-        cache_dir=args.hub_cache_dir,
-        local_files_only=args.offline,
-    )
+    if args.policy_checkpoint is None:
+        assets = resolve_model_assets(
+            config,
+            args.backbone,
+            args.demonstrations,
+            cache_dir=args.hub_cache_dir,
+            local_files_only=args.offline,
+        )
+    else:
+        policy_path = args.policy_checkpoint.expanduser().resolve()
+        if not policy_path.is_file():
+            raise FileNotFoundError(policy_path)
+        backbone_path, backbone_sha256 = resolve_backbone_asset(
+            config,
+            args.backbone,
+            cache_dir=args.hub_cache_dir,
+            local_files_only=args.offline,
+        )
+        hub = config["model_hub"]
+        assets = ResolvedModelAssets(
+            repository=str(hub["repository"]),
+            revision=str(hub["revision"]),
+            backbone=args.backbone,
+            demonstrations=args.demonstrations,
+            backbone_path=backbone_path,
+            backbone_sha256=backbone_sha256,
+            policy_path=policy_path,
+            policy_sha256=sha256_file(policy_path),
+            metrics_path=policy_path.with_name("metrics.json"),
+        )
     backbone, backbone_metadata = load_frozen_tcc_backbone(
         assets.backbone_path, args.tcc_source_root, device
     )
@@ -273,6 +306,10 @@ def main() -> None:
         report.write(f"Training episodes checked: {len(rows)}\n")
         report.write(f"Hub revision: {assets.revision}\n")
         report.write(f"Policy SHA256: {assets.policy_sha256}\n")
+        report.write(
+            "Policy source: "
+            f"{'local checkpoint' if args.policy_checkpoint else 'Hugging Face'}\n"
+        )
         report.write(
             "Fine-tuned backbone restored: "
             f"{'YES' if fine_tuned_backbone_restored else 'NO'}\n"

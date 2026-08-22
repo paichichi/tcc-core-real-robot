@@ -12,9 +12,11 @@ from tcc_real_robot.hrp_image_data import (
     JOINT_ACTION_SEMANTICS,
     JOINT_STATE_SEMANTICS,
     HRPImageDataset,
+    episode_level_transition_split,
     official_hrp_transition_split,
     require_complete_joint_position_buffer,
     require_joint_position_manifest,
+    start_weighted_transition_weights,
 )
 
 
@@ -105,6 +107,64 @@ def test_hrp_statistics_can_exclude_heldout_rows(tmp_path: Path) -> None:
     assert torch.allclose(action_mean, torch.full((7,), 2.0))
     assert torch.allclose(state_std, torch.ones(7))
     assert torch.allclose(action_std, torch.ones(7))
+
+    _, _, delta_mean, delta_std = dataset.state_action_statistics(
+        [0, 1], action_representation="current_delta"
+    )
+    assert torch.allclose(delta_mean, torch.zeros(7))
+    assert torch.allclose(delta_std, torch.zeros(7))
+
+
+def test_episode_level_transition_split_has_no_frame_leakage(tmp_path: Path) -> None:
+    database = tmp_path / "episodes.sqlite3"
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "CREATE TABLE samples (id INTEGER PRIMARY KEY, split TEXT, "
+            "task_index INTEGER, episode_index INTEGER, frame_index INTEGER)"
+        )
+        connection.executemany(
+            "INSERT INTO samples(split, task_index, episode_index, frame_index) "
+            "VALUES ('train', ?, ?, ?)",
+            [
+                (task, episode, frame)
+                for task in range(2)
+                for episode in range(5)
+                for frame in range(3)
+            ],
+        )
+
+    train, validation, test = episode_level_transition_split(
+        database,
+        train_episodes_per_task=3,
+        validation_episodes_per_task=1,
+        test_episodes_per_task=1,
+        shuffle_seed=7,
+    )
+
+    assert [len(part) for part in (train, validation, test)] == [18, 6, 6]
+    assert set(train).isdisjoint(validation)
+    assert set(train).isdisjoint(test)
+    assert set(validation).isdisjoint(test)
+    assert set(train) | set(validation) | set(test) == set(range(30))
+
+
+def test_start_weighted_transition_weights_use_frame_index(tmp_path: Path) -> None:
+    database = tmp_path / "weights.sqlite3"
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "CREATE TABLE samples (id INTEGER PRIMARY KEY, split TEXT, "
+            "frame_index INTEGER)"
+        )
+        connection.executemany(
+            "INSERT INTO samples(split, frame_index) VALUES ('train', ?)",
+            [(0,), (1,), (2,), (0,), (1,), (2,)],
+        )
+
+    weights = start_weighted_transition_weights(
+        database, [0, 2, 3, 5], start_frames=1, start_weight=10.0
+    )
+
+    assert weights.tolist() == [10.0, 1.0, 10.0, 1.0]
 
 
 def test_joint_position_manifest_rejects_old_action_semantics(tmp_path: Path) -> None:

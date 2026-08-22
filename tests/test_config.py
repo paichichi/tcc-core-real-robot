@@ -371,3 +371,36 @@ def test_v8_matches_hrp_release_single_view_defaults() -> None:
         "gaussian_blur_probability": 1.0,
         "imagenet_normalization": True,
     }
+
+
+def test_v9_is_trossen_native_joint_delta() -> None:
+    config = load_yaml(ROOT / "configs" / "experiment_v9_trossen_joint_delta_100.yaml")
+    policy = config["policy"]
+
+    assert policy["architecture"] == "hrp_state_token_gmm"
+    assert policy["action_representation"] == "current_delta"
+    assert policy["action_space"] == "joint_position"
+    assert policy["action_frame"] == "joint"
+    assert policy["action_adapter"] == "current_state_plus_joint_delta_to_position"
+    assert policy["state_representation"] == "measured_joint_position"
+    assert policy["gripper_action"] == "position_delta"
+    assert policy["normalize_state"] is True
+    assert policy["normalize_actions"] is True
+    assert policy["learning_rate"] == 0.0001
+    assert policy["training_steps"] == 50000
+    assert policy["deterministic_inference"] == "highest_probability_mode_mean"
+    assert config["model_hub"]["revision"] == (
+        "dfbc7a76194d4aad41c06441dd2d7e4abce397cc"
+    )
+    assert config["sampling"] == {
+        "protocol": "trossen_start_weighted",
+        "start_frames": 5,
+        "start_weight": 10.0,
+    }
+    assert config["split"] == {
+        "protocol": "trossen_episode_holdout",
+        "shuffle_seed": 3904767649,
+        "train_episodes_per_task": 80,
+        "validation_episodes_per_task": 10,
+        "test_episodes_per_task": 10,
+    }
