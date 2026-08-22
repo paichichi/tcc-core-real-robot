@@ -40,7 +40,6 @@ model_hub:
     - hralign
     - r3m_unadapted
     - d4r_imagenet
-    - hrp_imagenet
   supported_demonstrations: [60]
 
 policy:

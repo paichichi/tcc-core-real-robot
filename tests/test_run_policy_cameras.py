@@ -76,7 +76,7 @@ def test_joint_position_driver_contract_matches_collection_api() -> None:
         },
     }
     robot = {
-        "hrp_driver_contract": {
+        "driver_contract": {
             "action_representation": "absolute",
             "action_space": "joint_position",
             "driver_call": "set_all_positions",
@@ -86,7 +86,7 @@ def test_joint_position_driver_contract_matches_collection_api() -> None:
     }
 
     module.validate_joint_position_driver_contract(experiment, robot)
-    robot["hrp_driver_contract"]["driver_call"] = "set_cartesian_positions"
+    robot["driver_contract"]["driver_call"] = "set_cartesian_positions"
     with pytest.raises(RuntimeError, match="Driver contract mismatch"):
         module.validate_joint_position_driver_contract(experiment, robot)
 
@@ -102,7 +102,7 @@ def test_joint_delta_policy_reconstructs_for_position_driver() -> None:
         },
     }
     robot = {
-        "hrp_driver_contract": {
+        "driver_contract": {
             "action_representation": "absolute",
             "action_space": "joint_position",
             "driver_call": "set_all_positions",

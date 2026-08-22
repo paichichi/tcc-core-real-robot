@@ -14,14 +14,14 @@ def test_initial_revision_disables_actuation() -> None:
     assert config["robot"]["motor_parameters"] == "wxai_v0_20250509"
     assert config["robot"]["expected_driver_version"] == "1.9.3"
     assert config["robot"]["expected_firmware_version"] == "1.9.2"
-    hrp = config["hrp_driver_contract"]
-    assert hrp["execution"] == "bounded_joint_position_rollout"
-    assert hrp["action_representation"] == "absolute"
-    assert hrp["action_space"] == "joint_position"
-    assert hrp["driver_call"] == "set_all_positions"
-    assert hrp["ik_required"] is False
-    assert hrp["recommended_firmware"] == "1.9.3"
-    assert hrp["learned_policy_release"] == (
+    driver = config["driver_contract"]
+    assert driver["execution"] == "bounded_joint_position_rollout"
+    assert driver["action_representation"] == "absolute"
+    assert driver["action_space"] == "joint_position"
+    assert driver["driver_call"] == "set_all_positions"
+    assert driver["ik_required"] is False
+    assert driver["recommended_firmware"] == "1.9.3"
+    assert driver["learned_policy_release"] == (
         "BLOCKED_PENDING_SHADOW_AND_SUPERVISED_TEST"
     )
     assert config["cameras"]["cam_main"]["serial_number"] == "838212073584"
@@ -213,7 +213,6 @@ def test_r3m_single_view_proprio_policy_configuration() -> None:
         "hralign",
         "r3m_unadapted",
         "d4r_imagenet",
-        "hrp_imagenet",
     }
     assert config["model_hub"]["revision"] == (
         "7b79ed9cefe5121ed510c74843f650310c564ada"
@@ -242,7 +241,6 @@ def test_v6_gated_multiview_proprio_policy_configuration() -> None:
         "hralign",
         "r3m_unadapted",
         "d4r_imagenet",
-        "hrp_imagenet",
     ]
     assert config["model_hub"]["revision"] == (
         "94dc379f5ee00d7e410ac211396cd06d9e65953a"
@@ -290,87 +288,6 @@ def test_model_hub_is_pinned_to_an_immutable_revision() -> None:
     assert all(character in "0123456789abcdef" for character in hub["revision"])
     assert config["backbone"]["source"] == "huggingface"
     assert config["backbone"]["hub_name"] == "ours_rn50"
-
-
-def test_v7_hrp_gmm_delta_policy_configuration() -> None:
-    config = load_yaml(ROOT / "configs" / "experiment_v7_hrp_gmm_delta_60.yaml")
-    policy = config["policy"]
-
-    assert policy["reference"] == "hrp_data4robotics"
-    assert policy["cameras"] == ["cam_main", "cam_wrist"]
-    assert policy["camera_fusion"] == "raw_concat"
-    assert policy["proprioception"] is True
-    assert policy["progress_conditioning"] is None
-    assert policy["action_representation"] == "current_delta"
-    assert policy["action_distribution"] == "gaussian_mixture"
-    assert policy["num_modes"] == 5
-    assert policy["hidden_dimensions"] == [512, 512]
-    assert policy["dropout"] == 0.2
-    assert policy["loss"] == "gmm_nll"
-    assert policy["batch_size"] == 150
-    assert policy["learning_rate"] == 0.0001
-
-
-def test_v8_matches_hrp_release_single_view_defaults() -> None:
-    config = load_yaml(
-        ROOT / "configs" / "experiment_v8_hrp_official_single_view_60.yaml"
-    )
-    policy = config["policy"]
-
-    assert config["model_hub"]["supported_backbones"] == [
-        "ours_rn50",
-        "ours_vit",
-        "r3m_unadapted",
-        "d4r_imagenet",
-    ]
-    assert config["backbone"]["frozen"] is False
-    assert config["backbone"]["fine_tuning"] == "full_end_to_end"
-    assert config["dataset"]["tasks"] == ["pick_and_place_carrot_100"]
-    assert config["dataset"]["demonstrations_per_task"] == 100
-    assert config["dataset"]["action_leads_measured_state_frames"] == 2
-    assert policy["architecture"] == "hrp_state_token_gmm"
-    assert policy["architecture_reference"] == "data4robotics_hrp_release_default"
-    assert policy["action_adapter"] == "trossen_joint_position_passthrough"
-    assert policy["cameras"] == ["cam_main"]
-    assert policy["task_conditioning"] is None
-    assert policy["number_of_tasks"] == 1
-    assert policy["action_representation"] == "absolute"
-    assert policy["action_space"] == "joint_position"
-    assert policy["state_representation"] == "measured_joint_position"
-    assert policy["action_source"] == "original_lerobot_action"
-    assert policy["action_leads_measured_state_frames"] == 2
-    assert policy["action_frame"] == "joint"
-    assert policy["gripper_action"] == "position"
-    assert policy["action_distribution"] == "gaussian_mixture"
-    assert policy["num_modes"] == 5
-    assert policy["hidden_dimensions"] == [512, 512]
-    assert policy["dropout"] == 0.2
-    assert policy["training_steps"] == 40000
-    assert policy["batch_size"] == 150
-    assert policy["learning_rate"] == 0.0003
-    assert policy["precision"] == "float32"
-    assert policy["weight_decay"] == 0.0001
-    assert policy["normalize_state"] is False
-    assert policy["normalize_actions"] is True
-    assert policy["inference"] == "official_zero_std_mixture_sample"
-    assert config["split"] == {
-        "protocol": "hrp_fixed_transition_holdout",
-        "shuffle_seed": 3904767649,
-        "held_out_transitions": 500,
-    }
-    assert config["model_hub"]["supported_demonstrations"] == [100]
-    assert config["model_hub"]["revision"] == (
-        "dfbc7a76194d4aad41c06441dd2d7e4abce397cc"
-    )
-    assert config["augmentation"] == {
-        "name": "hrp_release_medium",
-        "random_resized_crop_scale": [0.9, 1.0],
-        "random_resized_crop_ratio": [0.75, 4 / 3],
-        "color_jitter_probability": 0.0,
-        "gaussian_blur": True,
-        "gaussian_blur_probability": 1.0,
-        "imagenet_normalization": True,
-    }
 
 
 def test_v9_is_minimal_r3m_with_independent_camera_encoders() -> None:
