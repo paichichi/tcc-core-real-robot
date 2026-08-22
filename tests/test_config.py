@@ -373,37 +373,47 @@ def test_v8_matches_hrp_release_single_view_defaults() -> None:
     }
 
 
-def test_v9_is_trossen_native_joint_delta() -> None:
-    config = load_yaml(ROOT / "configs" / "experiment_v9_trossen_joint_delta_100.yaml")
+def test_v9_is_minimal_r3m_with_independent_camera_encoders() -> None:
+    config = load_yaml(ROOT / "configs" / "experiment_v9_r3m_robomimic_100.yaml")
     policy = config["policy"]
 
-    assert policy["architecture"] == "dual_encoder_mlp_gmm"
-    assert policy["architecture_reference"] == "robomimic_multiview_late_fusion"
+    assert policy["architecture"] == (
+        "r3m_deterministic_mlp_dual_independent_encoder"
+    )
+    assert policy["architecture_reference"] == (
+        "r3m_mlp_plus_robomimic_independent_camera_encoders"
+    )
     assert policy["cameras"] == ["cam_main", "cam_wrist"]
     assert policy["shared_camera_backbone"] is False
-    assert policy["camera_fusion"] == "project_then_concat"
-    assert policy["camera_projection_dim"] == 128
-    assert policy["action_representation"] == "current_delta"
+    assert policy["camera_fusion"] == "raw_concat"
+    assert "camera_projection_dim" not in policy
+    assert "task_conditioning" not in policy
+    assert "proprioception" not in policy
+    assert "progress_conditioning" not in policy
+    assert policy["action_representation"] == "absolute"
     assert policy["action_space"] == "joint_position"
     assert policy["action_frame"] == "joint"
-    assert policy["action_adapter"] == "current_state_plus_joint_delta_to_position"
-    assert policy["state_representation"] == "measured_joint_position"
-    assert policy["gripper_action"] == "position_delta"
-    assert policy["normalize_state"] is True
+    assert policy["action_adapter"] == "trossen_joint_position_passthrough"
+    assert policy["state_representation"] is None
+    assert policy["gripper_action"] == "position"
+    assert policy["action_distribution"] == "deterministic"
+    assert policy["hidden_dimensions"] == [256, 256]
+    assert policy["loss"] == "mse"
+    assert "dropout" not in policy
+    assert policy["input_batch_norm"] is True
+    assert "input_layer_norm" not in policy
+    assert "normalize_state" not in policy
     assert policy["normalize_actions"] is True
-    assert policy["learning_rate"] == 0.0001
+    assert policy["learning_rate"] == 0.001
     assert policy["backbone_learning_rate"] == 0.00001
     assert policy["batch_size"] == 32
     assert policy["training_steps"] == 50000
-    assert policy["deterministic_inference"] == "highest_probability_mode_mean"
+    assert policy["deterministic_inference"] == "direct_mlp_output"
     assert config["model_hub"]["revision"] == (
         "dfbc7a76194d4aad41c06441dd2d7e4abce397cc"
     )
-    assert config["sampling"] == {
-        "protocol": "trossen_start_weighted",
-        "start_frames": 5,
-        "start_weight": 10.0,
-    }
+    assert "augmentation" not in config
+    assert "sampling" not in config
     assert config["split"] == {
         "protocol": "trossen_episode_holdout",
         "shuffle_seed": 3904767649,

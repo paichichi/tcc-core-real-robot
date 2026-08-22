@@ -29,7 +29,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--config",
         type=Path,
-        default=Path("configs/experiment_v9_trossen_joint_delta_100.yaml"),
+        default=Path("configs/experiment_v8_hrp_official_single_view_60.yaml"),
     )
     parser.add_argument("--dataset-root", type=Path)
     parser.add_argument(

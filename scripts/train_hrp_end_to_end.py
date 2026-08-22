@@ -46,7 +46,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--config",
         type=Path,
-        default=Path("configs/experiment_v9_trossen_joint_delta_100.yaml"),
+        default=Path("configs/experiment_v8_hrp_official_single_view_60.yaml"),
     )
     parser.add_argument("--image-buffer", type=Path, required=True)
     parser.add_argument("--backbone", default="hrp_imagenet")
@@ -218,11 +218,11 @@ def main() -> None:
             f"{action_contract_mismatches}"
         )
     if policy_config["cameras"] != ["cam_main", "cam_wrist"]:
-        raise ValueError("V9 late fusion requires cam_main and cam_wrist")
+        raise ValueError("Dual-view HRP training requires cam_main and cam_wrist")
     if policy_config.get("shared_camera_backbone") is not False:
-        raise ValueError("V9 requires separately-parameterized camera backbones")
+        raise ValueError("Dual-view HRP requires independent camera backbones")
     if policy_config.get("camera_fusion") != "project_then_concat":
-        raise ValueError("V9 requires project_then_concat late fusion")
+        raise ValueError("Dual-view HRP requires project_then_concat late fusion")
     if policy_config.get("precision") != "float32":
         raise ValueError("Official HRP reproduction requires float32 training")
     device = resolve_device(args.device)

@@ -133,7 +133,7 @@ def main() -> None:
     records = build_episode_records(
         dataset_root,
         task_names,
-        int(config["seed"]),
+        int(split.get("shuffle_seed", config["seed"])),
         split_sizes,
         shuffle=shuffle_episodes,
     )
@@ -199,6 +199,10 @@ def main() -> None:
         device=device,
     )
     fine_tuned_backbone_restored = restore_policy_backbone(backbone, bundle)
+    is_gmm_policy = (
+        bundle.config["policy"].get("action_distribution")
+        == "gaussian_mixture"
+    )
     trained_tasks = [str(value) for value in bundle.config["dataset"]["tasks"]]
     if trained_tasks != task_names:
         raise RuntimeError("Checkpoint and current config use different task ordering")
@@ -317,7 +321,10 @@ def main() -> None:
             "Fine-tuned backbone restored: "
             f"{'YES' if fine_tuned_backbone_restored else 'NO'}\n"
         )
-        report.write(f"GMM inference override: {args.gmm_inference}\n")
+        if is_gmm_policy:
+            report.write(f"GMM inference override: {args.gmm_inference}\n")
+        else:
+            report.write("Inference: deterministic direct MLP output\n")
         report.write(
             "Recorded envelope multiplier: "
             f"{args.recorded_envelope_multiplier:.3f}\n"

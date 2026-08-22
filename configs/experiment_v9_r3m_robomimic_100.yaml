@@ -1,0 +1,83 @@
+project: tcc-core-real-robot
+seed: 292285
+
+dataset:
+  repository: UoA-Trossen-Arm/pick_and_place_4_object_diverse
+  revision: 6ce893dc73fc6310ccbd46786f71a03a5b6a3da2
+  local_root: datasets/pick_and_place_4_object_diverse
+  demonstrations_per_task: 100
+  state_semantics: measured_joint_position_6_plus_gripper
+  action_semantics: commanded_joint_position_6_plus_gripper
+  action_source: original_lerobot_action_column
+  tasks:
+    - pick_and_place_carrot_100
+
+observations:
+  fps: 20
+  cameras: [cam_main, cam_wrist]
+  resolution: [640, 480]
+
+backbone:
+  source: huggingface
+  hub_name: ours_rn50
+  checkpoint: null
+  tcc_source_root: TBD
+  frozen: false
+  fine_tuning: independent_camera_full_end_to_end
+  image_size: 224
+
+model_hub:
+  repository: Chipaipai/tcc-core-real-robot-policies
+  revision: dfbc7a76194d4aad41c06441dd2d7e4abce397cc
+  backbone_manifest: backbones/manifest.json
+  policy_checkpoint_template: policies_v9_r3m_robomimic/{backbone}/checkpoint_050000.pt
+  policy_metrics_template: policies_v9_r3m_robomimic/{backbone}/metrics.json
+  supported_backbones: [ours_rn50, ours_vit, r3m_unadapted, d4r_imagenet]
+  supported_demonstrations: [100]
+
+policy:
+  implementation: tcc_mlp_bc_v9_r3m_robomimic
+  architecture: r3m_deterministic_mlp_dual_independent_encoder
+  architecture_reference: r3m_mlp_plus_robomimic_independent_camera_encoders
+  cameras: [cam_main, cam_wrist]
+  shared_camera_backbone: false
+  camera_fusion: raw_concat
+  number_of_tasks: 1
+  action_dim: 7
+  action_chunk_size: 1
+  action_representation: absolute
+  action_space: joint_position
+  action_frame: joint
+  state_representation: null
+  action_source: original_lerobot_action
+  action_adapter: trossen_joint_position_passthrough
+  gripper_action: position
+  action_distribution: deterministic
+  deterministic_inference: direct_mlp_output
+  inference: deterministic
+  hidden_dimensions: [256, 256]
+  activation: relu
+  input_batch_norm: true
+  output_layer_scale: 0.01
+  normalize_actions: true
+  optimizer: adam
+  weight_decay: 0.0
+  loss: mse
+  training_steps: 50000
+  batch_size: 32
+  learning_rate: 0.001
+  backbone_learning_rate: 0.00001
+  precision: float32
+  num_workers: 10
+  eval_every: 5000
+
+evaluation:
+  max_rollout_steps: 359
+  first_frame_recorded_envelope_multiplier: 2.0
+
+split:
+  protocol: trossen_episode_holdout
+  shuffle_seed: 3904767649
+  train_episodes_per_task: 80
+  validation_episodes_per_task: 10
+  test_episodes_per_task: 10

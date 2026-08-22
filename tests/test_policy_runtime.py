@@ -8,6 +8,7 @@ torch = pytest.importorskip("torch")
 
 from tcc_real_robot.policy import (
     HRPSingleViewGaussianMixturePolicy,
+    R3MRobomimicPolicy,
     TCCMLPGaussianMixturePolicy,
     TCCMLPPolicy,
 )
@@ -56,6 +57,41 @@ def checkpoint_payload() -> dict:
             },
         },
         "step": 50_000,
+    }
+
+
+def r3m_robomimic_checkpoint_payload() -> dict:
+    model = R3MRobomimicPolicy(feature_dim=3)
+    for parameter in model.parameters():
+        torch.nn.init.zeros_(parameter)
+    return {
+        "model": model.state_dict(),
+        "action_mean": torch.full((7,), 0.25),
+        "action_std": torch.ones(7),
+        "feature_dim": 3,
+        "config": {
+            "dataset": {"tasks": ["carrot"]},
+            "policy": {
+                "architecture": (
+                    "r3m_deterministic_mlp_dual_independent_encoder"
+                ),
+                "number_of_tasks": 1,
+                "action_dim": 7,
+                "action_chunk_size": 1,
+                "action_representation": "absolute",
+                "action_distribution": "deterministic",
+                "hidden_dimensions": [256, 256],
+                "output_layer_scale": 0.01,
+                "input_batch_norm": True,
+                "input_layer_norm": False,
+                "proprioception": False,
+                "cameras": ["cam_main", "cam_wrist"],
+                "camera_fusion": "raw_concat",
+                "camera_projection_dim": 0,
+                "camera_gate_hidden_dim": 0,
+            },
+        },
+        "step": 5_000,
     }
 
 
@@ -419,6 +455,32 @@ def test_progress_policy_requires_episode_progress(tmp_path: Path) -> None:
             image_size=32,
             device=torch.device("cpu"),
         )
+
+
+def test_r3m_robomimic_checkpoint_predicts_absolute_joint_goal(
+    tmp_path: Path,
+) -> None:
+    checkpoint = tmp_path / "r3m_robomimic.pt"
+    torch.save(r3m_robomimic_checkpoint_payload(), checkpoint)
+    bundle = load_policy_bundle(
+        checkpoint, expected_feature_dim=3, device=torch.device("cpu")
+    )
+    backbone = IndependentCameraBackbones(
+        MeanBackbone().eval(), MeanBackbone().eval()
+    ).eval()
+    frame = np.zeros((48, 64, 3), dtype=np.uint8)
+
+    action = predict_action(
+        backbone,
+        bundle,
+        frame,
+        frame,
+        task_index=0,
+        image_size=32,
+        device=torch.device("cpu"),
+    )
+
+    assert torch.allclose(action, torch.full((7,), 0.25))
 
 
 def test_progress_policy_predicts_with_normalized_episode_time(

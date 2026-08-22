@@ -195,7 +195,7 @@ def main() -> None:
     records = build_episode_records(
         dataset_root,
         task_names,
-        int(config["seed"]),
+        int(split.get("shuffle_seed", config["seed"])),
         (
             int(split["train_episodes_per_task"]),
             int(split["validation_episodes_per_task"]),

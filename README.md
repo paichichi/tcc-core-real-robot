@@ -1,32 +1,23 @@
 # Real-Robot Policy Training and Evaluation
 
-## 当前实验：V9 HRP-style policy + Trossen-native joint control
+## 当前实验：V9 minimal R3M + robomimic independent encoders
 
-当前配置为 `configs/experiment_v9_trossen_joint_delta_100.yaml`。视觉和 policy
-训练沿用 HRP release 的单视角、端到端 backbone、`[512, 512]` MLP-GMM 配方；
-机器人动作语义严格服从本数据集和 Trossen follower driver，不切换到 Cartesian
-velocity，也不引入 IK。
+当前配置为 `configs/experiment_v9_r3m_robomimic_100.yaml`。V9 只保留 R3M
+downstream policy 的确定性 MLP，以及 robomimic 多视角设计中的独立相机 encoder：
+`cam_main` 和 `cam_wrist` 从同一 source checkpoint 初始化，但参数完全独立并端到端
+微调。两路 pooled feature 直接拼接后进入 `BatchNorm -> 256 -> ReLU -> 256 ->
+ReLU -> 7`，不使用 feature projection、task token、proprioception、progress、
+dropout、mixture distribution、加权采样或训练图像增强。
 
-数据集原始 `action[t]` 是 6 维关节目标（rad）加 1 维夹爪目标（m），而
-`observation.state[t]` 是同一时刻的实测位置。V9 学习：
+训练目标就是数据集原始 `action[t]`：6 维关节绝对目标（rad）加 1 维夹爪绝对目标
+（m）。只使用 train episode 的逐维 action mean/std 做 normalization；runtime
+denormalize 后直接交给现有 Trossen joint-position 安全层和
+`set_all_positions(target, goal_time, False)`。V9 不使用 delta adapter、Cartesian
+velocity 或 IK。
 
-```text
-delta[t] = action[t] - observation.state[t]
-absolute_target[t] = latest_measured_state[t] + predicted_delta[t]
-```
-
-运行时只把还原后的 7 维绝对位置交给已有安全层，随后使用 Trossen 官方 Python
-API `set_all_positions(target, goal_time, False)` 以 20 Hz 非阻塞下发。控制路径仍
-检查数据集绝对动作范围、逐步变化、command lead、controller joint limits、跟踪
-误差和实测速度；退出时恢复 Idle。代码不会把 joint-delta checkpoint 送到
-Cartesian 或 velocity driver。
-
-V9 还修正了 V8 暴露出的三个训练问题：按完整 episode 做 80/10/10 划分，避免同一
-demo 的帧同时进入 train 和 validation；使用 train episode 的 state/delta 统计量；
-将每个 episode 前 5 帧提高到 10 倍采样权重，直接约束从 dataset home 起步的行为。
-部署固定使用最高概率 GMM 分量的均值，避免同一画面因类别采样产生随机动作。训练
-为 50K steps、Adam `1e-4`、weight decay `1e-4`、batch size 150，并端到端微调
-backbone。
+100 个 demo 按完整 episode 固定划分为 80/10/10，避免帧泄漏。默认训练为 50K
+steps、batch size 32、MLP Adam learning rate `1e-3`、backbone learning rate
+`1e-5`、MSE loss；根据 validation normalized MSE 保存 `checkpoint_best.pt`。
 
 完整训练和本地 checkpoint 离线闸门命令放在 `LINUX_COMMANDS.txt`。首帧诊断会
 比较预测绝对目标与 demo 记录目标；超过记录首步 envelope 的模型会得到

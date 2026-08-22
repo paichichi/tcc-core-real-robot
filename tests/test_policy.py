@@ -5,6 +5,7 @@ torch = pytest.importorskip("torch")
 from tcc_real_robot.policy import (
     ActionNormalizer,
     HRPSingleViewGaussianMixturePolicy,
+    R3MRobomimicPolicy,
     TCCMLPGaussianMixturePolicy,
     TCCMLPPolicy,
 )
@@ -18,6 +19,20 @@ def test_two_camera_policy_predicts_one_action() -> None:
         torch.tensor([0, 1, 2, 3, 0]),
     )
     assert output.shape == (5, 7)
+
+
+def test_minimal_r3m_robomimic_policy_has_only_raw_camera_features() -> None:
+    policy = R3MRobomimicPolicy(feature_dim=8).eval()
+    main = torch.randn(5, 8)
+    wrist = torch.randn(5, 8)
+
+    output = policy(main, wrist)
+
+    assert output.shape == (5, 7)
+    assert policy.mlp[0].num_features == 16
+    assert policy.proprio_dim == 0
+    assert policy.progress_dim == 0
+    assert not any("projection" in name for name, _ in policy.named_modules())
 
 
 def test_r3m_multiview_policy_projects_both_camera_features() -> None:

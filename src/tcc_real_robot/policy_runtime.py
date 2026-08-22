@@ -14,6 +14,7 @@ from torchvision.transforms import functional as vision_f
 from tcc_real_robot.policy import (
     ActionNormalizer,
     HRPSingleViewGaussianMixturePolicy,
+    R3MRobomimicPolicy,
     TCCMLPGaussianMixturePolicy,
     TCCMLPPolicy,
 )
@@ -30,7 +31,7 @@ _NORMALIZATION_CACHE: dict[
 class PolicyBundle:
     """A restored policy head and the action normalizer saved with it."""
 
-    model: TCCMLPPolicy | HRPSingleViewGaussianMixturePolicy
+    model: TCCMLPPolicy | HRPSingleViewGaussianMixturePolicy | R3MRobomimicPolicy
     normalizer: ActionNormalizer
     state_normalizer: ActionNormalizer | None
     config: dict[str, Any]
@@ -225,7 +226,21 @@ def load_policy_bundle(
     if int(policy_config.get("progress_dim", progress_dim)) != progress_dim:
         raise ValueError("Checkpoint progress_dim disagrees with progress_conditioning")
     architecture = str(policy_config.get("architecture", "pooled_feature_mlp"))
-    if architecture == "hrp_state_token_gmm":
+    if architecture == "r3m_deterministic_mlp_dual_independent_encoder":
+        if (
+            camera_names != ("cam_main", "cam_wrist")
+            or uses_proprioception
+            or progress_dim
+            or camera_fusion != "raw_concat"
+        ):
+            raise ValueError("Minimal R3M policy requires two raw camera features")
+        model = R3MRobomimicPolicy(
+            feature_dim=feature_dim,
+            action_dim=int(policy_config["action_dim"]),
+            hidden_dims=tuple(policy_config["hidden_dimensions"]),
+            output_layer_scale=float(policy_config.get("output_layer_scale", 0.01)),
+        )
+    elif architecture == "hrp_state_token_gmm":
         if camera_names != ("cam_main",) or progress_dim or not uses_proprioception:
             raise ValueError("HRP state-token policy requires one camera and state")
         model: TCCMLPPolicy | HRPSingleViewGaussianMixturePolicy = (
@@ -408,7 +423,13 @@ def predict_action(
         deterministic_checkpoint_inference = policy_config.get(
             "deterministic_inference"
         ) in {"highest_probability_mode_mean", "highest-probability-mode"}
-        if (
+        if isinstance(bundle.model, R3MRobomimicPolicy):
+            if cam_wrist_features is None:
+                raise RuntimeError("R3M multi-view policy requires cam_wrist")
+            normalized_action = bundle.model(
+                cam_main_features, cam_wrist_features
+            )
+        elif (
             (
                 gmm_inference_override == "highest-probability-mode"
                 or (

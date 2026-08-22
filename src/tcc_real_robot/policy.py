@@ -26,6 +26,60 @@ class ActionNormalizer(nn.Module):
         return action * self.std + self.mean
 
 
+class R3MRobomimicPolicy(nn.Module):
+    """Minimal R3M MLP over two independently encoded camera observations."""
+
+    camera_names = ("cam_main", "cam_wrist")
+    camera_fusion = "raw_concat"
+    camera_projection_dim = 0
+    camera_gate_hidden_dim = 0
+    proprio_dim = 0
+    progress_dim = 0
+
+    def __init__(
+        self,
+        feature_dim: int,
+        action_dim: int = 7,
+        hidden_dims: Sequence[int] = (256, 256),
+        output_layer_scale: float = 0.01,
+    ) -> None:
+        super().__init__()
+        if feature_dim < 1 or action_dim < 1:
+            raise ValueError("Feature and action dimensions must be positive")
+        if not hidden_dims or any(width < 1 for width in hidden_dims):
+            raise ValueError("R3M MLP requires positive hidden dimensions")
+        if output_layer_scale <= 0:
+            raise ValueError("Output-layer scale must be positive")
+        self.feature_dim = feature_dim
+        self.action_dim = action_dim
+        layers: list[nn.Module] = [nn.BatchNorm1d(2 * feature_dim)]
+        previous = 2 * feature_dim
+        for width in hidden_dims:
+            layers.extend((nn.Linear(previous, width), nn.ReLU()))
+            previous = width
+        output = nn.Linear(previous, action_dim)
+        with torch.no_grad():
+            output.weight.mul_(output_layer_scale)
+            if output.bias is not None:
+                output.bias.mul_(output_layer_scale)
+        layers.append(output)
+        self.mlp = nn.Sequential(*layers)
+
+    def forward(
+        self, cam_main: torch.Tensor, cam_wrist: torch.Tensor
+    ) -> torch.Tensor:
+        if (
+            cam_main.ndim != 2
+            or cam_main.shape[1] != self.feature_dim
+            or cam_wrist.shape != cam_main.shape
+        ):
+            raise ValueError(
+                "R3M camera features must be matching "
+                f"[B, {self.feature_dim}] tensors"
+            )
+        return self.mlp(torch.cat((cam_main, cam_wrist), dim=-1))
+
+
 class TCCMLPPolicy(nn.Module):
     """Predict one action from configured frozen features and optional state."""
 
