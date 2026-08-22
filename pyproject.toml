@@ -16,8 +16,13 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  "av>=13.1",
+  "numpy>=1.26",
+  "pyarrow>=17.0",
   "pytest>=8.0",
   "ruff>=0.9",
+  "torch>=2.4",
+  "torchvision>=0.19",
 ]
 robot = [
   "trossen-arm==1.9.3",
