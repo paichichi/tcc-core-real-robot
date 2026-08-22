@@ -423,3 +423,12 @@ def test_end_to_end_checkpoint_restores_fine_tuned_backbone() -> None:
     assert changed is True
     assert torch.equal(restored.weight, backbone.weight)
     assert torch.equal(restored.bias, backbone.bias)
+
+
+def test_checkpoint_without_embedded_backbone_reports_not_restored() -> None:
+    restored = torch.nn.Linear(3, 3)
+    policy_bundle = SimpleNamespace(backbone_state=None)
+
+    changed = restore_policy_backbone(restored, policy_bundle)
+
+    assert changed is False

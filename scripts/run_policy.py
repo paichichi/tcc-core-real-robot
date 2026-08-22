@@ -523,7 +523,14 @@ def main() -> None:
         expected_feature_dim=int(backbone_metadata["feature_dim"]),
         device=device,
     )
-    restore_policy_backbone(backbone, bundle)
+    fine_tuned_backbone_restored = restore_policy_backbone(backbone, bundle)
+    checkpoint_requires_fine_tuned_backbone = (
+        bundle.config.get("backbone", {}).get("frozen") is False
+    )
+    if checkpoint_requires_fine_tuned_backbone and not fine_tuned_backbone_restored:
+        raise RuntimeError(
+            "End-to-end checkpoint is missing its embedded backbone_model"
+        )
     validate_policy_contract(config, bundle)
     checkpoint_policy_config = bundle.config["policy"]
     action_representation = checkpoint_policy_config.get(
@@ -644,6 +651,14 @@ def main() -> None:
         report.write(f"Hub revision: {assets.revision}\n")
         report.write(f"Backbone SHA256: {assets.backbone_sha256}\n")
         report.write(f"Policy SHA256: {assets.policy_sha256}\n")
+        report.write(
+            "Fine-tuned backbone restored: "
+            f"{'YES' if fine_tuned_backbone_restored else 'NO'}\n"
+        )
+        if fine_tuned_backbone_restored and bundle.backbone_state is not None:
+            report.write(
+                f"Embedded backbone tensors: {len(bundle.backbone_state)}\n"
+            )
         report.write(f"Device: {device}\n")
         report.write(f"Camera backend: {args.camera_backend}\n")
         report.write(f"Camera read mode: {args.camera_read_mode}\n")
