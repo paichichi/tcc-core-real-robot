@@ -101,6 +101,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--inference-warmup-steps", type=int)
     parser.add_argument(
+        "--action-ema-alpha",
+        type=float,
+        help=(
+            "Override policy_evaluation.action_ema_alpha for bounded rollout. "
+            "Lower values smooth policy targets more strongly."
+        ),
+    )
+    parser.add_argument(
         "--gmm-inference",
         choices=("checkpoint", "highest-probability-mode"),
         default="checkpoint",
@@ -284,9 +292,7 @@ class SynchronizedCameras:
                     main_std = np.std(main_rgb, axis=(0, 1))
                     wrist_std = np.std(wrist_rgb, axis=(0, 1))
                     main_valid = float(np.max(main_std)) >= self.minimum_channel_std
-                    wrist_valid = (
-                        float(np.max(wrist_std)) >= self.minimum_channel_std
-                    )
+                    wrist_valid = float(np.max(wrist_std)) >= self.minimum_channel_std
                     skew_valid = pair_skew_ms <= self.maximum_pair_skew_ms
                     if main_valid and wrist_valid and skew_valid:
                         self.last_pair_skew_ms = pair_skew_ms
@@ -431,12 +437,18 @@ def validate_joint_position_driver_contract(
             policy.get("action_adapter"),
             expected_adapters[representation],
         )
-    control_fps = float(robot_config["policy_evaluation"]["clipped_rollout"]["control_fps"])
+    control_fps = float(
+        robot_config["policy_evaluation"]["clipped_rollout"]["control_fps"]
+    )
     observation_fps = float(experiment_config["observations"]["fps"])
     if control_fps != observation_fps:
         mismatches["control_fps"] = (control_fps, observation_fps)
     lead_frames = policy.get("action_leads_measured_state_frames")
-    if not isinstance(lead_frames, int) or isinstance(lead_frames, bool) or lead_frames <= 0:
+    if (
+        not isinstance(lead_frames, int)
+        or isinstance(lead_frames, bool)
+        or lead_frames <= 0
+    ):
         mismatches["policy.action_leads_measured_state_frames"] = (
             lead_frames,
             "positive integer",
@@ -476,6 +488,8 @@ def main() -> None:
         raise SystemExit("--camera-max-pair-skew-ms must be positive")
     if args.controller_timeout <= 0:
         raise SystemExit("--controller-timeout must be positive")
+    if args.action_ema_alpha is not None and not 0.0 < args.action_ema_alpha <= 1.0:
+        raise SystemExit("--action-ema-alpha must be in (0, 1]")
     config = load_yaml(args.config)
     robot_config = load_yaml(args.robot_config)
     validate_joint_position_driver_contract(config, robot_config)
@@ -503,9 +517,7 @@ def main() -> None:
         if uses_wrist_camera and args.cam_main_serial == args.cam_wrist_serial:
             raise SystemExit("Main and wrist RealSense serials must be distinct")
     elif not args.cam_main or not args.cam_wrist:
-        raise SystemExit(
-            "--camera-backend v4l2 requires --cam-main and --cam-wrist"
-        )
+        raise SystemExit("--camera-backend v4l2 requires --cam-main and --cam-wrist")
     assert_shadow_only(
         robot_config,
         args.execute or args.execute_clipped_step or args.execute_policy,
@@ -522,9 +534,7 @@ def main() -> None:
                 f"[1, {clipped_max_steps}]"
             )
         if not args.emergency_stop_ready:
-            raise SystemExit(
-                "--execute-clipped-step requires --emergency-stop-ready"
-            )
+            raise SystemExit("--execute-clipped-step requires --emergency-stop-ready")
 
     from tcc_real_robot.policy_runtime import (
         load_policy_bundle,
@@ -553,10 +563,7 @@ def main() -> None:
         evaluation_settings.get("force_first_action_home", False)
     )
     dataset_home_target = [
-        *[
-            float(value)
-            for value in robot_config["robot"]["home_arm_positions_rad"]
-        ],
+        *[float(value) for value in robot_config["robot"]["home_arm_positions_rad"]],
         float(robot_config["robot"]["home_gripper_position_m"]),
     ]
     if len(dataset_home_target) != 7:
@@ -640,9 +647,7 @@ def main() -> None:
                 "Checkpoint/config lookahead mismatch: "
                 f"{checkpoint_lookahead} != {configured_lookahead}"
             )
-        runtime_execution_delta_gain = float(
-            config["policy"]["execution_delta_gain"]
-        )
+        runtime_execution_delta_gain = float(config["policy"]["execution_delta_gain"])
         if not 0.0 < runtime_execution_delta_gain <= 1.0:
             raise ValueError("Runtime execution_delta_gain must be in (0, 1]")
     policy_uses_proprioception = bundle.model.proprio_dim > 0
@@ -719,10 +724,7 @@ def main() -> None:
             "Policy proprioception: "
             f"{'ENABLED' if policy_uses_proprioception else 'DISABLED'}\n"
         )
-        report.write(
-            "Policy action representation: "
-            f"{action_representation}\n"
-        )
+        report.write(f"Policy action representation: {action_representation}\n")
         report.write(
             "Policy progress conditioning: "
             f"{checkpoint_policy_config.get('progress_conditioning', 'DISABLED')}\n"
@@ -733,8 +735,7 @@ def main() -> None:
                 f"{float(checkpoint_policy_config.get('execution_delta_gain', 0.0)):.6f}\n"
             )
             report.write(
-                "Runtime future-delta gain: "
-                f"{runtime_execution_delta_gain:.6f}\n"
+                f"Runtime future-delta gain: {runtime_execution_delta_gain:.6f}\n"
             )
         report.write(f"Hub repository: {assets.repository}\n")
         report.write(f"Hub revision: {assets.revision}\n")
@@ -745,9 +746,7 @@ def main() -> None:
             f"{'YES' if fine_tuned_backbone_restored else 'NO'}\n"
         )
         if fine_tuned_backbone_restored and bundle.backbone_state is not None:
-            report.write(
-                f"Embedded backbone tensors: {len(bundle.backbone_state)}\n"
-            )
+            report.write(f"Embedded backbone tensors: {len(bundle.backbone_state)}\n")
         report.write(f"Device: {device}\n")
         report.write(f"Camera backend: {args.camera_backend}\n")
         report.write(f"Camera read mode: {args.camera_read_mode}\n")
@@ -767,16 +766,18 @@ def main() -> None:
         report.write(f"Camera startup delay: {args.camera_startup_delay:.3f} s\n")
         report.write(f"Camera read attempts: {args.camera_read_attempts}\n")
         report.write(f"Camera retry delay: {args.camera_retry_delay:.3f} s\n")
-        report.write(
-            f"Camera minimum channel std: {args.camera_min_channel_std:.3f}\n"
-        )
+        report.write(f"Camera minimum channel std: {args.camera_min_channel_std:.3f}\n")
         report.write(
             f"Camera maximum pair skew: {args.camera_max_pair_skew_ms:.3f} ms\n"
         )
         report.write(f"Policy rollout rate: {fps:.3f} Hz\n")
         if args.execute_clipped_step:
             clipped = evaluation_settings["clipped_rollout"]
-            action_ema_alpha = float(evaluation_settings["action_ema_alpha"])
+            action_ema_alpha = float(
+                args.action_ema_alpha
+                if args.action_ema_alpha is not None
+                else evaluation_settings["action_ema_alpha"]
+            )
             if not 0.0 < action_ema_alpha <= 1.0:
                 raise ValueError("policy_evaluation.action_ema_alpha must be in (0, 1]")
             report.write(f"Policy target EMA alpha: {action_ema_alpha:.3f}\n")
@@ -912,9 +913,7 @@ def main() -> None:
                 )
             with camera_context as cameras:
                 report.write(f"Camera main negotiated: {cameras.main_properties}\n")
-                report.write(
-                    f"Camera wrist negotiated: {cameras.wrist_properties}\n\n"
-                )
+                report.write(f"Camera wrist negotiated: {cameras.wrist_properties}\n\n")
                 for _ in range(args.warmup_frames):
                     cameras.read_rgb_pair()
                 for _ in range(inference_warmup_steps):
@@ -950,7 +949,11 @@ def main() -> None:
 
                         action_filter = ExponentialActionFilter(
                             dataset_home_target,
-                            float(evaluation_settings["action_ema_alpha"]),
+                            float(
+                                args.action_ema_alpha
+                                if args.action_ema_alpha is not None
+                                else evaluation_settings["action_ema_alpha"]
+                            ),
                         )
                 rollout_started = time.monotonic()
                 for step in range(max_steps):
@@ -1010,9 +1013,7 @@ def main() -> None:
                         dataset_home_target,
                         force_first_action_home and args.execute_clipped_step,
                     )
-                    first_action_home_anchored = (
-                        first_action_home_anchored or anchored
-                    )
+                    first_action_home_anchored = first_action_home_anchored or anchored
                     if action_filter is not None:
                         action = raw_action.new_tensor(
                             action_filter.update(action.tolist())
@@ -1058,7 +1059,9 @@ def main() -> None:
                                 bounded_step.sampled_at_monotonic - previous_time
                             )
                             if sample_period <= 0:
-                                raise RuntimeError("Policy state timestamps did not advance")
+                                raise RuntimeError(
+                                    "Policy state timestamps did not advance"
+                                )
                             observed_arm_velocity = max(
                                 abs(current - previous) / sample_period
                                 for current, previous in zip(
@@ -1123,9 +1126,7 @@ def main() -> None:
                         raw_values = ", ".join(
                             f"{value:.7f}" for value in raw_action.tolist()
                         )
-                        report.write(
-                            f"step={step:03d} raw_action=[{raw_values}]\n"
-                        )
+                        report.write(f"step={step:03d} raw_action=[{raw_values}]\n")
                     values = ", ".join(f"{value:.7f}" for value in action.tolist())
                     report.write(
                         f"step={step:03d} elapsed_s={elapsed:.6f} "
@@ -1135,16 +1136,16 @@ def main() -> None:
                     )
             if args.execute_clipped_step and bounded_steps:
                 if home_session is None:
-                    raise RuntimeError("Policy session closed before final verification")
+                    raise RuntimeError(
+                        "Policy session closed before final verification"
+                    )
                 final_verification = home_session.settle_and_verify_policy_target(
                     list(bounded_steps[-1].commanded)
                 )
                 report.write("\nFinal settled target verification\n")
                 report.write(
                     "Observed: ["
-                    + ", ".join(
-                        f"{value:.7f}" for value in final_verification.observed
-                    )
+                    + ", ".join(f"{value:.7f}" for value in final_verification.observed)
                     + "]\n"
                 )
                 report.write(
@@ -1254,10 +1255,14 @@ def main() -> None:
                         and max(
                             item.max_commanded_arm_delta_rad for item in bounded_steps
                         )
-                        <= max(float(value) for value in clipped["max_action_delta"][:6])
+                        <= max(
+                            float(value) for value in clipped["max_action_delta"][:6]
+                        )
                         + 1e-9,
                         "commanded_gripper_delta_safe": bool(bounded_steps)
-                        and max(item.commanded_gripper_delta_m for item in bounded_steps)
+                        and max(
+                            item.commanded_gripper_delta_m for item in bounded_steps
+                        )
                         <= float(clipped["max_action_delta"][6]) + 1e-9,
                         "command_lead_safe": bool(bounded_steps)
                         and all(
@@ -1274,13 +1279,9 @@ def main() -> None:
                         "official_nonblocking_commands": clipped["command_blocking"]
                         is False,
                         "observed_arm_velocity_safe": max_observed_arm_velocity
-                        <= float(
-                            robot_config["safety"]["max_joint_velocity_rad_s"]
-                        ),
+                        <= float(robot_config["safety"]["max_joint_velocity_rad_s"]),
                         "observed_gripper_velocity_safe": max_observed_gripper_velocity
-                        <= float(
-                            robot_config["safety"]["max_gripper_velocity_m_s"]
-                        ),
+                        <= float(robot_config["safety"]["max_gripper_velocity_m_s"]),
                         "final_tracking_safe": final_verification is not None,
                     }
                 )

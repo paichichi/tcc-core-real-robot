@@ -8,6 +8,7 @@ torch = pytest.importorskip("torch")
 
 from tcc_real_robot.policy import (
     ActionNormalizer,
+    HRPSingleViewGaussianMixturePolicy,
     MainWristResidualPolicy,
     R3MRobomimicPolicy,
     TCCMLPGaussianMixturePolicy,
@@ -74,9 +75,7 @@ def r3m_robomimic_checkpoint_payload() -> dict:
         "config": {
             "dataset": {"tasks": ["carrot"]},
             "policy": {
-                "architecture": (
-                    "r3m_deterministic_mlp_dual_independent_encoder"
-                ),
+                "architecture": ("r3m_deterministic_mlp_dual_independent_encoder"),
                 "number_of_tasks": 1,
                 "action_dim": 7,
                 "action_chunk_size": 1,
@@ -98,9 +97,7 @@ def r3m_robomimic_checkpoint_payload() -> dict:
 
 
 def r3m_robomimic_proprio_checkpoint_payload() -> dict:
-    model = R3MRobomimicPolicy(
-        feature_dim=3, proprio_dim=7, proprio_dropout=0.1
-    )
+    model = R3MRobomimicPolicy(feature_dim=3, proprio_dim=7, proprio_dropout=0.1)
     for parameter in model.parameters():
         torch.nn.init.zeros_(parameter)
     return {
@@ -172,9 +169,7 @@ def v10_checkpoint_payload() -> dict:
                 "proprioception_dim": 7,
                 "cameras": ["cam_main", "cam_wrist"],
                 "shared_camera_backbone": True,
-                "camera_fusion": (
-                    "main_policy_with_gated_wrist_action_residual"
-                ),
+                "camera_fusion": ("main_policy_with_gated_wrist_action_residual"),
                 "camera_projection_dim": 4,
                 "camera_gate_hidden_dim": 5,
                 "wrist_dropout": 0.2,
@@ -400,7 +395,9 @@ def test_policy_feature_mismatch_is_rejected(tmp_path: Path) -> None:
         )
 
 
-def test_runtime_rejects_checkpoint_with_different_proprioception(tmp_path: Path) -> None:
+def test_runtime_rejects_checkpoint_with_different_proprioception(
+    tmp_path: Path,
+) -> None:
     checkpoint = tmp_path / "policy.pt"
     torch.save(checkpoint_payload(), checkpoint)
     bundle = load_policy_bundle(
@@ -706,3 +703,71 @@ def test_checkpoint_without_embedded_backbone_reports_not_restored() -> None:
     changed = restore_policy_backbone(restored, policy_bundle)
 
     assert changed is False
+
+
+def hrp_single_view_checkpoint_payload() -> dict:
+    model = HRPSingleViewGaussianMixturePolicy(
+        feature_dim=3,
+        action_dim=7,
+        state_dim=7,
+        hidden_dims=(4, 4),
+        num_modes=5,
+        dropout=0.0,
+    )
+    for parameter in model.parameters():
+        torch.nn.init.zeros_(parameter)
+    with torch.no_grad():
+        model.mixture_means.bias.reshape(5, 7)[2].fill_(0.25)
+        model.mixture_logits.bias.copy_(torch.tensor([0.0, 1.0, 5.0, 2.0, 0.0]))
+    return {
+        "model": model.state_dict(),
+        "action_mean": torch.zeros(7),
+        "action_std": torch.ones(7),
+        "state_mean": torch.zeros(7),
+        "state_std": torch.ones(7),
+        "feature_dim": 3,
+        "config": {
+            "dataset": {"tasks": ["carrot"]},
+            "policy": {
+                "architecture": "hrp_state_token_gmm",
+                "number_of_tasks": 1,
+                "action_dim": 7,
+                "action_chunk_size": 1,
+                "action_representation": "absolute",
+                "action_distribution": "gaussian_mixture",
+                "num_modes": 5,
+                "min_std": 1e-4,
+                "hidden_dimensions": [4, 4],
+                "dropout": 0.0,
+                "precision": "float32",
+                "deterministic_inference": "highest_probability_mode_mean",
+                "proprioception": True,
+                "proprioception_dim": 7,
+                "cameras": ["cam_main"],
+            },
+        },
+        "step": 40_000,
+    }
+
+
+def test_hrp_single_view_uses_highest_probability_mode(tmp_path: Path) -> None:
+    checkpoint = tmp_path / "hrp_single_view.pt"
+    torch.save(hrp_single_view_checkpoint_payload(), checkpoint)
+    bundle = load_policy_bundle(
+        checkpoint, expected_feature_dim=3, device=torch.device("cpu")
+    )
+    frame = np.zeros((48, 64, 3), dtype=np.uint8)
+
+    action = predict_action(
+        MeanBackbone().eval(),
+        bundle,
+        frame,
+        frame,
+        task_index=0,
+        image_size=32,
+        device=torch.device("cpu"),
+        observation_state=np.zeros(7, dtype=np.float32),
+        gmm_inference_override="highest-probability-mode",
+    )
+
+    assert torch.allclose(action, torch.full((7,), 0.25))

@@ -26,6 +26,145 @@ class ActionNormalizer(nn.Module):
         return action * self.std + self.mean
 
 
+class HRPSingleViewGaussianMixturePolicy(nn.Module):
+    """Single-view state-token MLP-GMM used by the V8 HRP pipeline."""
+
+    camera_names = ("cam_main",)
+    camera_fusion = "raw_concat"
+    camera_projection_dim = 0
+    camera_gate_hidden_dim = 0
+    progress_dim = 0
+
+    def __init__(
+        self,
+        feature_dim: int,
+        action_dim: int = 7,
+        state_dim: int = 7,
+        hidden_dims: Sequence[int] = (512, 512),
+        num_modes: int = 5,
+        dropout: float = 0.2,
+        min_std: float = 1e-4,
+    ) -> None:
+        super().__init__()
+        if feature_dim < 1 or action_dim < 1 or state_dim < 1:
+            raise ValueError("HRP dimensions must be positive")
+        if not hidden_dims or any(width < 1 for width in hidden_dims):
+            raise ValueError("HRP requires positive hidden dimensions")
+        if num_modes < 2 or not 0.0 <= dropout < 1.0 or min_std <= 0:
+            raise ValueError("Invalid HRP mixture/dropout configuration")
+        self.feature_dim = feature_dim
+        self.action_dim = action_dim
+        self.proprio_dim = state_dim
+        self.num_modes = num_modes
+        self.min_std = min_std
+        self.state_token = nn.Sequential(
+            nn.Dropout(0.2), nn.Linear(state_dim, feature_dim)
+        )
+        self.token_batch_norm = nn.BatchNorm1d(feature_dim)
+        self.token_dropout = nn.Dropout(dropout)
+        layers: list[nn.Module] = []
+        previous = 2 * feature_dim
+        for width in hidden_dims:
+            layers.extend((nn.Linear(previous, width), nn.ReLU(), nn.Dropout(dropout)))
+            previous = width
+        self.mlp = nn.Sequential(*layers)
+        self.mixture_means = nn.Linear(previous, num_modes * action_dim)
+        self.mixture_scales = nn.Linear(previous, num_modes * action_dim)
+        self.mixture_logits = nn.Linear(previous, num_modes)
+
+    def _hidden(
+        self,
+        cam_main: torch.Tensor,
+        cam_wrist: torch.Tensor | None,
+        task_index: torch.Tensor,
+        proprioception: torch.Tensor | None,
+        progress: torch.Tensor | None,
+    ) -> torch.Tensor:
+        if cam_main.ndim != 2 or cam_main.shape[1] != self.feature_dim:
+            raise ValueError("Unexpected HRP visual feature shape")
+        if proprioception is None or proprioception.shape != (
+            cam_main.shape[0],
+            self.proprio_dim,
+        ):
+            raise ValueError("HRP policy requires normalized robot state")
+        if cam_wrist is not None or progress is not None:
+            raise ValueError("V8 single-view HRP accepts no wrist/progress input")
+        if task_index.shape != (cam_main.shape[0],) or bool(torch.any(task_index != 0)):
+            raise ValueError("V8 HRP policy is trained separately per task")
+        state = self.state_token(proprioception)
+        tokens = torch.stack((cam_main, state), dim=1)
+        tokens = self.token_batch_norm(tokens.transpose(1, 2)).transpose(1, 2)
+        return self.mlp(self.token_dropout(tokens).flatten(1))
+
+    def mixture_parameters(
+        self,
+        cam_main: torch.Tensor,
+        cam_wrist: torch.Tensor | None,
+        task_index: torch.Tensor,
+        proprioception: torch.Tensor | None = None,
+        progress: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        hidden = self._hidden(cam_main, cam_wrist, task_index, proprioception, progress)
+        batch = hidden.shape[0]
+        means = self.mixture_means(hidden).reshape(
+            batch, self.num_modes, self.action_dim
+        )
+        scales = F.softplus(self.mixture_scales(hidden)).reshape(
+            batch, self.num_modes, self.action_dim
+        )
+        return means, scales + self.min_std, self.mixture_logits(hidden)
+
+    def forward(
+        self,
+        cam_main: torch.Tensor,
+        cam_wrist: torch.Tensor | None,
+        task_index: torch.Tensor,
+        proprioception: torch.Tensor | None = None,
+        progress: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        means, _, logits = self.mixture_parameters(
+            cam_main, cam_wrist, task_index, proprioception, progress
+        )
+        modes = torch.distributions.Categorical(logits=logits).sample()
+        batch = torch.arange(means.shape[0], device=means.device)
+        return means[batch, modes]
+
+    def highest_probability_mean(
+        self,
+        cam_main: torch.Tensor,
+        cam_wrist: torch.Tensor | None,
+        task_index: torch.Tensor,
+        proprioception: torch.Tensor | None = None,
+        progress: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        means, _, logits = self.mixture_parameters(
+            cam_main, cam_wrist, task_index, proprioception, progress
+        )
+        modes = torch.argmax(logits, dim=-1)
+        batch = torch.arange(means.shape[0], device=means.device)
+        return means[batch, modes]
+
+    def negative_log_likelihood(
+        self,
+        target: torch.Tensor,
+        cam_main: torch.Tensor,
+        cam_wrist: torch.Tensor | None,
+        task_index: torch.Tensor,
+        proprioception: torch.Tensor | None = None,
+        progress: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        means, scales, logits = self.mixture_parameters(
+            cam_main, cam_wrist, task_index, proprioception, progress
+        )
+        components = torch.distributions.Independent(
+            torch.distributions.Normal(means, scales), 1
+        )
+        distribution = torch.distributions.MixtureSameFamily(
+            torch.distributions.Categorical(logits=logits), components
+        )
+        return -distribution.log_prob(target).mean()
+
+
 class R3MRobomimicPolicy(nn.Module):
     """R3M MLP over two independent camera encoders and optional robot state."""
 
@@ -87,8 +226,7 @@ class R3MRobomimicPolicy(nn.Module):
             or cam_wrist.shape != cam_main.shape
         ):
             raise ValueError(
-                "R3M camera features must be matching "
-                f"[B, {self.feature_dim}] tensors"
+                f"R3M camera features must be matching [B, {self.feature_dim}] tensors"
             )
         conditioning = [cam_main, cam_wrist]
         if self.proprio_dim:
@@ -124,7 +262,9 @@ class MainWristResidualPolicy(nn.Module):
     ) -> None:
         super().__init__()
         if min(feature_dim, action_dim, projection_dim, gate_hidden_dim) < 1:
-            raise ValueError("Feature, action, projection, and gate dimensions must be positive")
+            raise ValueError(
+                "Feature, action, projection, and gate dimensions must be positive"
+            )
         if not hidden_dims or any(width < 1 for width in hidden_dims):
             raise ValueError("Policy requires positive hidden dimensions")
         if proprio_dim < 1:
@@ -206,19 +346,21 @@ class MainWristResidualPolicy(nn.Module):
             or cam_wrist.shape != cam_main.shape
         ):
             raise ValueError(
-                "Camera features must be matching "
-                f"[B, {self.feature_dim}] tensors"
+                f"Camera features must be matching [B, {self.feature_dim}] tensors"
             )
         if proprioception.shape != (cam_main.shape[0], self.proprio_dim):
             raise ValueError("Unexpected proprioception shape")
         main_embedding = self.cam_main_projection(cam_main)
         wrist_embedding = self.cam_wrist_projection(cam_wrist)
         if self.training and self.wrist_dropout:
-            keep = torch.rand(
-                (cam_main.shape[0], 1),
-                device=cam_main.device,
-                dtype=cam_main.dtype,
-            ) >= self.wrist_dropout
+            keep = (
+                torch.rand(
+                    (cam_main.shape[0], 1),
+                    device=cam_main.device,
+                    dtype=cam_main.dtype,
+                )
+                >= self.wrist_dropout
+            )
             wrist_embedding = wrist_embedding * keep
         else:
             keep = torch.ones(

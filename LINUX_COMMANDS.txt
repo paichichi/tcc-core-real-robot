@@ -2,4 +2,10 @@ cd ~/tcc-core-real-robot
 
 source .venv/bin/activate
 
-python scripts/run_policy.py --config configs/experiment_v10_shared_rn50_main_wrist_residual_100.yaml --robot-config configs/robot.yaml --policy-checkpoint models/v10_15k/policies_v10_shared_rn50_main_wrist_residual/ours_rn50/checkpoint_015000.pt --backbone ours_rn50 --demonstrations 100 --task carrot --camera-backend realsense-sdk --cam-main-serial 838212073584 --cam-wrist-serial 409122274608 --tcc-source-root /home/robotarm/TCC-core --offline --device auto --execute-home --max-steps 10
+python scripts/fetch_policy_assets.py --config configs/experiment_v8_hrp_official_single_view_60.yaml --backbone ours_rn50 --demonstrations 100
+
+python scripts/run_policy.py --config configs/experiment_v8_hrp_official_single_view_60.yaml --robot-config configs/robot.yaml --backbone ours_rn50 --demonstrations 100 --task carrot --camera-backend realsense-sdk --cam-main-serial 838212073584 --cam-wrist-serial 409122274608 --tcc-source-root /home/robotarm/TCC-core --offline --device auto --gmm-inference highest-probability-mode --execute-home --max-steps 20
+
+python scripts/run_policy.py --config configs/experiment_v8_hrp_official_single_view_60.yaml --robot-config configs/robot.yaml --backbone ours_rn50 --demonstrations 100 --task carrot --camera-backend realsense-sdk --cam-main-serial 838212073584 --cam-wrist-serial 409122274608 --tcc-source-root /home/robotarm/TCC-core --offline --device auto --gmm-inference highest-probability-mode --action-ema-alpha 0.25 --execute-policy --emergency-stop-ready --supervised-bounded-test --max-steps 10
+
+python scripts/run_policy.py --config configs/experiment_v8_hrp_official_single_view_60.yaml --robot-config configs/robot.yaml --backbone ours_rn50 --demonstrations 100 --task carrot --camera-backend realsense-sdk --cam-main-serial 838212073584 --cam-wrist-serial 409122274608 --tcc-source-root /home/robotarm/TCC-core --offline --device auto --gmm-inference highest-probability-mode --action-ema-alpha 0.25 --execute-policy --emergency-stop-ready --supervised-bounded-test --max-steps 359

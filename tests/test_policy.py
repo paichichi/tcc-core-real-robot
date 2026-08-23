@@ -4,6 +4,7 @@ torch = pytest.importorskip("torch")
 
 from tcc_real_robot.policy import (
     ActionNormalizer,
+    HRPSingleViewGaussianMixturePolicy,
     MainWristResidualPolicy,
     R3MRobomimicPolicy,
     TCCMLPGaussianMixturePolicy,
@@ -35,7 +36,9 @@ def test_main_wrist_residual_policy_is_main_dominant_and_bounded() -> None:
     assert torch.all(correction.abs() <= 0.25)
     assert torch.all((gate > 0.0) & (gate < 1.0))
     assert torch.allclose(output, main_action + gate * correction)
-    assert torch.allclose(gate, torch.full_like(gate, torch.sigmoid(torch.tensor(-2.0))))
+    assert torch.allclose(
+        gate, torch.full_like(gate, torch.sigmoid(torch.tensor(-2.0)))
+    )
 
 
 def test_main_wrist_residual_policy_wrist_dropout_disables_correction() -> None:
@@ -230,13 +233,9 @@ def test_progress_conditioned_policy_accepts_normalized_episode_time() -> None:
 
 def test_r3m_output_layer_uses_small_initialization() -> None:
     torch.manual_seed(1)
-    baseline = TCCMLPPolicy(
-        feature_dim=8, num_tasks=4, output_layer_scale=1.0
-    )
+    baseline = TCCMLPPolicy(feature_dim=8, num_tasks=4, output_layer_scale=1.0)
     torch.manual_seed(1)
-    r3m_style = TCCMLPPolicy(
-        feature_dim=8, num_tasks=4, output_layer_scale=0.01
-    )
+    r3m_style = TCCMLPPolicy(feature_dim=8, num_tasks=4, output_layer_scale=0.01)
 
     baseline_output = baseline.mlp[-1]
     r3m_output = r3m_style.mlp[-1]
@@ -260,11 +259,34 @@ def test_gmm_policy_predicts_deterministic_mode_mean_and_nll() -> None:
 
     first = policy(main, wrist, task, state)
     second = policy(main, wrist, task, state)
-    loss = policy.negative_log_likelihood(
-        torch.randn(3, 7), main, wrist, task, state
-    )
+    loss = policy.negative_log_likelihood(torch.randn(3, 7), main, wrist, task, state)
 
     assert first.shape == (3, 7)
     assert torch.equal(first, second)
     assert loss.ndim == 0
+    assert torch.isfinite(loss)
+
+
+def test_hrp_state_is_projected_as_a_second_token() -> None:
+    policy = HRPSingleViewGaussianMixturePolicy(
+        feature_dim=8,
+        hidden_dims=(16, 16),
+        num_modes=5,
+        dropout=0.2,
+    ).eval()
+    visual = torch.randn(4, 8)
+    state = torch.randn(4, 7)
+    task = torch.zeros(4, dtype=torch.long)
+
+    means, _, logits = policy.mixture_parameters(visual, None, task, state)
+    torch.manual_seed(17)
+    expected_modes = torch.distributions.Categorical(logits=logits).sample()
+    torch.manual_seed(17)
+    output = policy(visual, None, task, state)
+    loss = policy.negative_log_likelihood(torch.randn(4, 7), visual, None, task, state)
+
+    assert output.shape == (4, 7)
+    assert policy.mlp[0].in_features == 16
+    assert policy.state_token[1].out_features == 8
+    assert torch.equal(output, means[torch.arange(4), expected_modes])
     assert torch.isfinite(loss)

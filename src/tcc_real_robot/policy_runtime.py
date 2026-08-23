@@ -13,6 +13,7 @@ from torchvision.transforms import functional as vision_f
 
 from tcc_real_robot.policy import (
     ActionNormalizer,
+    HRPSingleViewGaussianMixturePolicy,
     MainWristResidualPolicy,
     R3MRobomimicPolicy,
     TCCMLPGaussianMixturePolicy,
@@ -31,7 +32,12 @@ _NORMALIZATION_CACHE: dict[
 class PolicyBundle:
     """A restored policy head and the action normalizer saved with it."""
 
-    model: TCCMLPPolicy | R3MRobomimicPolicy | MainWristResidualPolicy
+    model: (
+        TCCMLPPolicy
+        | HRPSingleViewGaussianMixturePolicy
+        | R3MRobomimicPolicy
+        | MainWristResidualPolicy
+    )
     normalizer: ActionNormalizer
     state_normalizer: ActionNormalizer | None
     config: dict[str, Any]
@@ -104,8 +110,7 @@ def validate_policy_contract(
         )
     if mismatches:
         raise RuntimeError(
-            "Runtime config/checkpoint policy contract mismatch: "
-            f"{mismatches}"
+            f"Runtime config/checkpoint policy contract mismatch: {mismatches}"
         )
 
 
@@ -203,9 +208,7 @@ def load_policy_bundle(
         raise ValueError(
             "project_then_concat requires a positive camera_projection_dim"
         )
-    camera_names = tuple(
-        policy_config.get("cameras", ("cam_main", "cam_wrist"))
-    )
+    camera_names = tuple(policy_config.get("cameras", ("cam_main", "cam_wrist")))
     if camera_fusion == "gated_residual" and (
         camera_names != ("cam_main", "cam_wrist")
         or camera_projection_dim <= 0
@@ -220,9 +223,7 @@ def load_policy_bundle(
     uses_proprioception = policy_config.get("proprioception") is True
     progress_conditioning = policy_config.get("progress_conditioning")
     if progress_conditioning not in (None, "normalized_episode_time"):
-        raise ValueError(
-            f"Unsupported progress conditioning: {progress_conditioning}"
-        )
+        raise ValueError(f"Unsupported progress conditioning: {progress_conditioning}")
     action_representation = policy_config.get("action_representation", "absolute")
     if action_representation not in {
         "absolute",
@@ -231,7 +232,10 @@ def load_policy_bundle(
         "cartesian_velocity",
     }:
         raise ValueError(f"Unsupported action representation: {action_representation}")
-    if action_representation in {"future_delta", "current_delta"} and not uses_proprioception:
+    if (
+        action_representation in {"future_delta", "current_delta"}
+        and not uses_proprioception
+    ):
         raise ValueError(f"{action_representation} checkpoints require proprioception")
     if action_representation == "future_delta":
         lookahead_frames = int(policy_config.get("lookahead_frames", 1))
@@ -242,9 +246,7 @@ def load_policy_bundle(
         if not 0.0 < execution_delta_gain <= 1.0:
             raise ValueError("execution_delta_gain must be in (0, 1]")
     proprio_dim = (
-        int(policy_config.get("proprioception_dim", 7))
-        if uses_proprioception
-        else 0
+        int(policy_config.get("proprioception_dim", 7)) if uses_proprioception else 0
     )
     progress_dim = 1 if progress_conditioning == "normalized_episode_time" else 0
     if int(policy_config.get("progress_dim", progress_dim)) != progress_dim:
@@ -257,13 +259,24 @@ def load_policy_bundle(
         "r3m_deterministic_mlp_dual_independent_encoder": False,
         "r3m_deterministic_mlp_dual_independent_encoder_proprio": True,
     }
-    if architecture == v10_architecture:
+    if architecture == "hrp_state_token_gmm":
+        if camera_names != ("cam_main",) or progress_dim or not uses_proprioception:
+            raise ValueError("HRP state-token policy requires one camera and state")
+        model = HRPSingleViewGaussianMixturePolicy(
+            feature_dim=feature_dim,
+            action_dim=int(policy_config["action_dim"]),
+            state_dim=proprio_dim,
+            hidden_dims=tuple(policy_config["hidden_dimensions"]),
+            num_modes=int(policy_config.get("num_modes", 5)),
+            dropout=float(policy_config.get("dropout", 0.2)),
+            min_std=float(policy_config.get("min_std", 1e-4)),
+        )
+    elif architecture == v10_architecture:
         if (
             camera_names != ("cam_main", "cam_wrist")
             or not uses_proprioception
             or progress_dim
-            or camera_fusion
-            != "main_policy_with_gated_wrist_action_residual"
+            or camera_fusion != "main_policy_with_gated_wrist_action_residual"
             or policy_config.get("shared_camera_backbone") is not True
         ):
             raise ValueError(
@@ -300,9 +313,7 @@ def load_policy_bundle(
             hidden_dims=tuple(policy_config["hidden_dimensions"]),
             output_layer_scale=float(policy_config.get("output_layer_scale", 0.01)),
             proprio_dim=proprio_dim,
-            proprio_dropout=float(
-                policy_config.get("proprioception_dropout", 0.0)
-            ),
+            proprio_dropout=float(policy_config.get("proprioception_dropout", 0.0)),
         )
     else:
         action_distribution = str(
@@ -318,9 +329,7 @@ def load_policy_bundle(
                 "min_std": float(policy_config.get("min_std", 1e-4)),
             }
         else:
-            raise ValueError(
-                f"Unsupported action distribution: {action_distribution}"
-            )
+            raise ValueError(f"Unsupported action distribution: {action_distribution}")
         model = model_class(
             feature_dim=feature_dim,
             num_tasks=int(policy_config["number_of_tasks"]),
@@ -419,18 +428,14 @@ def predict_action(
         if isinstance(backbone, IndependentCameraBackbones):
             if "cam_wrist" not in bundle.model.camera_names:
                 raise ValueError("Independent camera backbones require cam_wrist")
-            cam_main_features, cam_wrist_features = backbone(
-                images[0:1], images[1:2]
-            )
+            cam_main_features, cam_wrist_features = backbone(images[0:1], images[1:2])
             cam_main_features = cam_main_features.float()
             cam_wrist_features = cam_wrist_features.float()
         else:
             features = backbone(images).float()
             cam_main_features = features[0:1]
             cam_wrist_features = (
-                features[1:2]
-                if "cam_wrist" in bundle.model.camera_names
-                else None
+                features[1:2] if "cam_wrist" in bundle.model.camera_names else None
             )
         proprioception: torch.Tensor | None = None
         if bundle.model.proprio_dim:
@@ -459,24 +464,36 @@ def predict_action(
                 raise ValueError(
                     f"Expected episode progress shape [1, {bundle.model.progress_dim}]"
                 )
-            valid_progress = torch.isfinite(progress) & (progress >= 0.0) & (
-                progress <= 1.0
+            valid_progress = (
+                torch.isfinite(progress) & (progress >= 0.0) & (progress <= 1.0)
             )
             if not bool(valid_progress.all().item()):
                 raise ValueError("episode_progress must be finite and within [0, 1]")
         task_tensor = torch.tensor([task_index], device=device)
         if gmm_inference_override not in (None, "highest-probability-mode"):
             raise ValueError(
-                "gmm_inference_override must be None or "
-                "'highest-probability-mode'"
+                "gmm_inference_override must be None or 'highest-probability-mode'"
             )
-        if isinstance(
-            bundle.model, (R3MRobomimicPolicy, MainWristResidualPolicy)
-        ):
+        if isinstance(bundle.model, (R3MRobomimicPolicy, MainWristResidualPolicy)):
             if cam_wrist_features is None:
                 raise RuntimeError("R3M multi-view policy requires cam_wrist")
             normalized_action = bundle.model(
                 cam_main_features, cam_wrist_features, normalized_state
+            )
+        elif isinstance(bundle.model, HRPSingleViewGaussianMixturePolicy) and (
+            gmm_inference_override == "highest-probability-mode"
+            or (
+                gmm_inference_override is None
+                and policy_config.get("deterministic_inference")
+                in {"highest_probability_mode_mean", "highest-probability-mode"}
+            )
+        ):
+            normalized_action = bundle.model.highest_probability_mean(
+                cam_main_features,
+                cam_wrist_features,
+                task_tensor,
+                normalized_state,
+                progress,
             )
         else:
             normalized_action = bundle.model(
@@ -488,12 +505,12 @@ def predict_action(
             )
         action = bundle.normalizer.denormalize(normalized_action)
         policy_config = bundle.config["policy"]
-        action_representation = policy_config.get(
-            "action_representation", "absolute"
-        )
+        action_representation = policy_config.get("action_representation", "absolute")
         if action_representation in {"future_delta", "current_delta"}:
             if proprioception is None:
-                raise RuntimeError(f"{action_representation} policy has no proprioception")
+                raise RuntimeError(
+                    f"{action_representation} policy has no proprioception"
+                )
             if action_representation == "future_delta":
                 lookahead_frames = int(policy_config.get("lookahead_frames", 1))
                 default_gain = 1.0 / lookahead_frames
