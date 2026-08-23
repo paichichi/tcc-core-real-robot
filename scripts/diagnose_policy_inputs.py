@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import io
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,6 +12,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import torch
+from PIL import Image
 from run_policy import SynchronizedCameras, resolve_task
 from torch.nn import functional as torch_f
 
@@ -159,6 +161,26 @@ def match_channel_moments(source: np.ndarray, target: np.ndarray) -> np.ndarray:
     return np.clip(np.rint(matched), 0, 255).astype(np.uint8)
 
 
+def jpeg_round_trip(frame: np.ndarray, quality: int = 95) -> np.ndarray:
+    """Apply the JPEG stage used by the V9 training-image cache."""
+    if frame.ndim != 3 or frame.shape[2] != 3 or frame.dtype != np.uint8:
+        raise ValueError("JPEG input must be an RGB uint8 image")
+    buffer = io.BytesIO()
+    Image.fromarray(frame, mode="RGB").save(buffer, format="JPEG", quality=quality)
+    buffer.seek(0)
+    with Image.open(buffer) as decoded:
+        return np.asarray(decoded.convert("RGB"), dtype=np.uint8).copy()
+
+
+def channel_statistics(frame: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    values = frame.astype(np.float64)
+    return values.mean(axis=(0, 1)), values.std(axis=(0, 1))
+
+
+def maximum_arm_action_difference(left: np.ndarray, right: np.ndarray) -> float:
+    return float(np.max(np.abs(left[:6] - right[:6])))
+
+
 def main() -> None:
     args = parse_args()
     if args.episodes <= 0:
@@ -205,11 +227,11 @@ def main() -> None:
     selected = [
         record
         for record in records
-        if record.task_index == task_index and record.split == "train"
+        if record.task_index == task_index
     ][: args.episodes]
     if len(selected) != args.episodes:
         raise RuntimeError(
-            f"Only {len(selected)} training episodes available; requested {args.episodes}"
+            f"Only {len(selected)} episodes available; requested {args.episodes}"
         )
 
     device = resolve_device(args.device)
@@ -239,6 +261,8 @@ def main() -> None:
     width, height = [int(value) for value in config["observations"]["resolution"]]
     camera_fps = float(robot_config["policy_evaluation"]["camera_capture_fps"])
 
+    home_session = None
+    home_preparation = None
     if args.execute_home:
         try:
             import trossen_arm
@@ -250,10 +274,11 @@ def main() -> None:
             trossen_arm, robot_config, args.controller_timeout
         )
         try:
-            preparation = home_session.prepare()
-            home = np.asarray(preparation.observed, dtype=np.float64)
-        finally:
+            home_preparation = home_session.prepare()
+            home = np.asarray(home_preparation.observed, dtype=np.float64)
+        except Exception:
             home_session.close()
+            raise
     else:
         robot = robot_config["robot"]
         home = np.asarray(
@@ -289,12 +314,20 @@ def main() -> None:
             height,
             camera_fps,
         )
-    with camera_context as cameras:
-        for _ in range(args.warmup_frames):
-            cameras.read_rgb_pair()
-        live_main, live_wrist = cameras.read_rgb_pair()
-        camera_properties = (cameras.main_properties, cameras.wrist_properties)
-        pair_skew_ms = cameras.last_pair_skew_ms
+    try:
+        with camera_context as cameras:
+            for _ in range(args.warmup_frames):
+                cameras.read_rgb_pair()
+            live_main, live_wrist = cameras.read_rgb_pair()
+            camera_properties = (cameras.main_properties, cameras.wrist_properties)
+            pair_skew_ms = cameras.last_pair_skew_ms
+            if home_session is not None:
+                # Use the state measured immediately after the exact policy frames,
+                # while the configured position-mode session is still alive.
+                home = np.asarray(home_session.read_positions(), dtype=np.float64)
+    finally:
+        if home_session is not None:
+            home_session.close()
 
     image_size = int(backbone_metadata["image_size"])
     live_prediction = (
@@ -337,6 +370,23 @@ def main() -> None:
             bundle,
             live_wrist,
             live_main,
+            task_index,
+            image_size,
+            device,
+            observation_state=home,
+            episode_progress=0.0,
+        )
+        .numpy()
+        .astype(np.float64)
+    )
+    jpeg_live_main = jpeg_round_trip(live_main)
+    jpeg_live_wrist = jpeg_round_trip(live_wrist)
+    jpeg_live_prediction = (
+        predict_action(
+            backbone,
+            bundle,
+            jpeg_live_main,
+            jpeg_live_wrist,
             task_index,
             image_size,
             device,
@@ -422,6 +472,39 @@ def main() -> None:
             image_size,
             device,
             observation_state=nearest_normal["state"],
+            episode_progress=0.0,
+        )
+        .numpy()
+        .astype(np.float64)
+    )
+    # Factorial input isolation:
+    # A = demo image + demo state; B = live image + demo state;
+    # C = demo image + live state; D = live image + live state.
+    live_image_demo_state_prediction = (
+        predict_action(
+            backbone,
+            bundle,
+            live_main,
+            live_wrist,
+            task_index,
+            image_size,
+            device,
+            observation_state=nearest_normal["state"],
+            episode_progress=0.0,
+        )
+        .numpy()
+        .astype(np.float64)
+    )
+    demo_image_live_state_prediction = (
+        predict_action(
+            backbone,
+            bundle,
+            nearest_normal["main"],
+            nearest_normal["wrist"],
+            task_index,
+            image_size,
+            device,
+            observation_state=home,
             episode_progress=0.0,
         )
         .numpy()
@@ -514,6 +597,8 @@ def main() -> None:
     demo_wrist_path = args.output_dir / f"{stem}_nearest_demo_wrist.png"
     matched_main_path = args.output_dir / f"{stem}_matched_live_main.png"
     matched_wrist_path = args.output_dir / f"{stem}_matched_live_wrist.png"
+    jpeg_main_path = args.output_dir / f"{stem}_jpeg95_live_main.png"
+    jpeg_wrist_path = args.output_dir / f"{stem}_jpeg95_live_wrist.png"
     contact_path = args.output_dir / f"{stem}_comparison.jpg"
     report_path = args.output_dir / f"{stem}.txt"
     save_rgb(live_main_path, live_main)
@@ -522,6 +607,8 @@ def main() -> None:
     save_rgb(demo_wrist_path, nearest_normal["wrist"])
     save_rgb(matched_main_path, matched_live_main)
     save_rgb(matched_wrist_path, matched_live_wrist)
+    save_rgb(jpeg_main_path, jpeg_live_main)
+    save_rgb(jpeg_wrist_path, jpeg_live_wrist)
     contact = np.vstack(
         (
             np.hstack(
@@ -555,6 +642,42 @@ def main() -> None:
     matched_main_delta = action_delta(matched_main_prediction, home)
     matched_wrist_delta = action_delta(matched_wrist_prediction, home)
     nearest_action_error = np.abs(nearest_prediction - nearest_normal["action"])
+    first_states = np.stack([row["state"] for row in demo_rows]).astype(np.float64)
+    first_actions = np.stack([row["action"] for row in demo_rows]).astype(np.float64)
+    first_state_min = first_states.min(axis=0)
+    first_state_max = first_states.max(axis=0)
+    first_state_mean = first_states.mean(axis=0)
+    first_state_std = first_states.std(axis=0)
+    safe_first_state_std = np.where(first_state_std > 1e-9, first_state_std, 1.0)
+    live_first_state_z = (home - first_state_mean) / safe_first_state_std
+    live_state_inside_first_frame_envelope = bool(
+        np.all((home >= first_state_min) & (home <= first_state_max))
+    )
+    checkpoint_state_z = None
+    if bundle.state_normalizer is not None:
+        checkpoint_state_mean = bundle.state_normalizer.mean.detach().cpu().numpy()
+        checkpoint_state_std = bundle.state_normalizer.std.detach().cpu().numpy()
+        checkpoint_state_z = (home - checkpoint_state_mean) / checkpoint_state_std
+
+    live_main_mean, live_main_std = channel_statistics(live_main)
+    live_wrist_mean, live_wrist_std = channel_statistics(live_wrist)
+    demo_main_mean, demo_main_std = channel_statistics(nearest_normal["main"])
+    demo_wrist_mean, demo_wrist_std = channel_statistics(nearest_normal["wrist"])
+    jpeg_effect = maximum_arm_action_difference(
+        live_prediction, jpeg_live_prediction
+    )
+    vision_effect_demo_state = maximum_arm_action_difference(
+        nearest_prediction, live_image_demo_state_prediction
+    )
+    vision_effect_live_state = maximum_arm_action_difference(
+        demo_image_live_state_prediction, live_prediction
+    )
+    state_effect_demo_image = maximum_arm_action_difference(
+        nearest_prediction, demo_image_live_state_prediction
+    )
+    state_effect_live_image = maximum_arm_action_difference(
+        live_image_demo_state_prediction, live_prediction
+    )
     with report_path.open("w", encoding="utf-8") as report:
         report.write("Live Policy Input Diagnostic\n")
         report.write("============================\n")
@@ -574,6 +697,25 @@ def main() -> None:
             f"Home {'observed' if args.execute_home else 'configured reference'}: "
             f"{home.tolist()}\n\n"
         )
+        if home_preparation is not None:
+            report.write(
+                "Home preparation tracking error arm/gripper: "
+                f"{home_preparation.max_arm_error_rad:.7f} rad / "
+                f"{home_preparation.gripper_error_m:.7f} m\n\n"
+            )
+        report.write("Collection/runtime contracts\n")
+        report.write(
+            f"Collection video: 640x480 RGB-decoded AV1/yuv420p @ "
+            f"{float(config['observations']['fps']):.3f} FPS\n"
+        )
+        report.write(
+            "Training cache: collection video decode -> JPEG quality=95 -> "
+            "RGB decode\n"
+        )
+        report.write(
+            f"Runtime camera: serial-pinned RGB8 @ {camera_fps:.3f} FPS; "
+            f"policy loop target={float(config['observations']['fps']):.3f} Hz\n\n"
+        )
         report.write(f"Inference profile steps: {args.profile_steps}\n")
         report.write(
             "Inference latency median/p95/max: "
@@ -591,6 +733,35 @@ def main() -> None:
         report.write(f"Live swapped prediction: {swapped_prediction.tolist()}\n")
         report.write(f"Live swapped maximum arm delta: {swapped_arm_delta:.7f} rad\n")
         report.write(f"Live swapped gripper delta: {swapped_gripper_delta:.7f} m\n\n")
+        report.write(
+            f"Live JPEG95 prediction: {jpeg_live_prediction.tolist()}\n"
+        )
+        report.write(
+            "Raw-live versus JPEG95-live maximum arm action difference: "
+            f"{jpeg_effect:.7f} rad\n\n"
+        )
+
+        report.write("A/B/C/D image-state isolation\n")
+        report.write(
+            f"A demo image + demo state: {nearest_prediction.tolist()}\n"
+        )
+        report.write(
+            "B live image + demo state: "
+            f"{live_image_demo_state_prediction.tolist()}\n"
+        )
+        report.write(
+            "C demo image + live state: "
+            f"{demo_image_live_state_prediction.tolist()}\n"
+        )
+        report.write(f"D live image + live state: {live_prediction.tolist()}\n")
+        report.write(
+            "Vision substitution effect with demo/live state: "
+            f"{vision_effect_demo_state:.7f} / {vision_effect_live_state:.7f} rad\n"
+        )
+        report.write(
+            "State substitution effect with demo/live image: "
+            f"{state_effect_demo_image:.7f} / {state_effect_live_image:.7f} rad\n\n"
+        )
         report.write(
             "Live-main + demo-wrist prediction: "
             f"{live_main_demo_wrist_prediction.tolist()}\n"
@@ -670,12 +841,46 @@ def main() -> None:
             "Nearest demo prediction maximum error: "
             f"{float(nearest_action_error.max()):.7f}\n\n"
         )
+        report.write("First-frame state distribution\n")
+        report.write(f"Episodes compared: {len(demo_rows)}\n")
+        report.write(f"First state minimum: {first_state_min.tolist()}\n")
+        report.write(f"First state maximum: {first_state_max.tolist()}\n")
+        report.write(f"First state mean: {first_state_mean.tolist()}\n")
+        report.write(f"First state std: {first_state_std.tolist()}\n")
+        report.write(f"Live state first-frame z-score: {live_first_state_z.tolist()}\n")
+        report.write(
+            "Live state inside first-frame envelope: "
+            f"{'YES' if live_state_inside_first_frame_envelope else 'NO'}\n"
+        )
+        if checkpoint_state_z is not None:
+            report.write(
+                "Live state checkpoint-normalized z-score: "
+                f"{checkpoint_state_z.tolist()}\n"
+            )
+        report.write(f"First action minimum: {first_actions.min(axis=0).tolist()}\n")
+        report.write(f"First action maximum: {first_actions.max(axis=0).tolist()}\n\n")
+
+        report.write("RGB channel statistics (mean / std)\n")
+        report.write(
+            f"Live main: {live_main_mean.tolist()} / {live_main_std.tolist()}\n"
+        )
+        report.write(
+            f"Demo main: {demo_main_mean.tolist()} / {demo_main_std.tolist()}\n"
+        )
+        report.write(
+            f"Live wrist: {live_wrist_mean.tolist()} / {live_wrist_std.tolist()}\n"
+        )
+        report.write(
+            f"Demo wrist: {demo_wrist_mean.tolist()} / {demo_wrist_std.tolist()}\n\n"
+        )
         report.write(f"Live main image: {live_main_path}\n")
         report.write(f"Live wrist image: {live_wrist_path}\n")
         report.write(f"Nearest demo main image: {demo_main_path}\n")
         report.write(f"Nearest demo wrist image: {demo_wrist_path}\n")
         report.write(f"Color-matched live main image: {matched_main_path}\n")
         report.write(f"Color-matched live wrist image: {matched_wrist_path}\n")
+        report.write(f"JPEG95 live main image: {jpeg_main_path}\n")
+        report.write(f"JPEG95 live wrist image: {jpeg_wrist_path}\n")
         report.write(f"Comparison image: {contact_path}\n")
 
     print(f"report: {report_path}")
