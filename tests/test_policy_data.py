@@ -8,10 +8,40 @@ import torch
 
 from tcc_real_robot.policy_data import (
     build_episode_records,
+    load_cached_absolute_chunk_split,
     load_cached_current_delta_split,
     load_cached_future_delta_split,
     load_cached_split,
 )
+
+
+def test_absolute_action_chunks_do_not_cross_episode_boundaries(
+    tmp_path: Path,
+) -> None:
+    for episode_index, offset in ((0, 0.0), (1, 100.0)):
+        path = tmp_path / "train" / "task_0" / f"episode_{episode_index:06d}.pt"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        action = torch.arange(35, dtype=torch.float32).reshape(5, 7) + offset
+        torch.save(
+            {
+                "cam_main": torch.full((5, 2), offset),
+                "cam_wrist": torch.full((5, 2), offset),
+                "action": action,
+                "state": torch.zeros((5, 7)),
+                "task_index": torch.zeros(5, dtype=torch.long),
+            },
+            path,
+        )
+
+    loaded = load_cached_absolute_chunk_split(tmp_path, "train", 3)
+
+    assert loaded["action"].shape == (6, 21)
+    assert torch.equal(
+        loaded["action"][0].reshape(3, 7),
+        torch.arange(21, dtype=torch.float32).reshape(3, 7),
+    )
+    assert loaded["action"][3, 0].item() == 100.0
+    assert loaded["cam_main"][:, 0].tolist() == [0.0] * 3 + [100.0] * 3
 
 
 def test_episode_split_has_no_frame_level_leakage(tmp_path: Path) -> None:

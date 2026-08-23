@@ -602,6 +602,7 @@ def main() -> None:
     from tcc_real_robot.policy_runtime import (
         load_policy_bundle,
         predict_action,
+        reset_action_queue,
         resolve_device,
         restore_policy_backbone,
         validate_policy_contract,
@@ -1011,7 +1012,9 @@ def main() -> None:
                             if args.gmm_inference == "checkpoint"
                             else args.gmm_inference
                         ),
+                        use_action_queue=True,
                     )
+                reset_action_queue(bundle)
                 if home_session is not None:
                     home_reference = home_session.read_positions()
                     if args.execute_clipped_step:
@@ -1099,6 +1102,7 @@ def main() -> None:
                             if args.gmm_inference == "checkpoint"
                             else args.gmm_inference
                         ),
+                        use_action_queue=True,
                     )
                     action, anchored = apply_first_action_home_anchor(
                         raw_action,

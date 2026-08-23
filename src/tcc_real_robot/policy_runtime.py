@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections import deque
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +44,7 @@ class PolicyBundle:
     config: dict[str, Any]
     step: int
     backbone_state: dict[str, torch.Tensor] | None = None
+    action_queue: deque[torch.Tensor] = field(default_factory=deque)
 
 
 def validate_policy_contract(
@@ -64,6 +66,8 @@ def validate_policy_contract(
         "residual_regularization_weight",
         "proprioception",
         "proprioception_dim",
+        "action_chunk_size",
+        "action_steps_per_inference",
         "action_representation",
         "action_adapter",
         "action_space",
@@ -218,8 +222,14 @@ def load_policy_bundle(
             "gated_residual requires both cameras and positive projection/gate "
             "dimensions"
         )
-    if int(policy_config.get("action_chunk_size", -1)) != 1:
-        raise ValueError("This runner requires a single-step policy checkpoint")
+    action_chunk_size = int(policy_config.get("action_chunk_size", 1))
+    if action_chunk_size < 1:
+        raise ValueError("action_chunk_size must be positive")
+    action_steps_per_inference = int(policy_config.get("action_steps_per_inference", 1))
+    if not 1 <= action_steps_per_inference <= action_chunk_size:
+        raise ValueError(
+            "action_steps_per_inference must be within [1, action_chunk_size]"
+        )
     uses_proprioception = policy_config.get("proprioception") is True
     progress_conditioning = policy_config.get("progress_conditioning")
     if progress_conditioning not in (None, "normalized_episode_time"):
@@ -237,6 +247,8 @@ def load_policy_bundle(
         and not uses_proprioception
     ):
         raise ValueError(f"{action_representation} checkpoints require proprioception")
+    if action_chunk_size > 1 and action_representation != "absolute":
+        raise ValueError("Chunked MLP currently supports absolute actions only")
     if action_representation == "future_delta":
         lookahead_frames = int(policy_config.get("lookahead_frames", 1))
         default_gain = 1.0 / lookahead_frames
@@ -333,7 +345,7 @@ def load_policy_bundle(
         model = model_class(
             feature_dim=feature_dim,
             num_tasks=int(policy_config["number_of_tasks"]),
-            action_dim=int(policy_config["action_dim"]),
+            action_dim=int(policy_config["action_dim"]) * action_chunk_size,
             hidden_dims=tuple(policy_config["hidden_dimensions"]),
             proprio_dim=proprio_dim,
             progress_dim=progress_dim,
@@ -405,8 +417,11 @@ def predict_action(
     execution_delta_gain_override: float | None = None,
     episode_progress: float | torch.Tensor | None = None,
     gmm_inference_override: str | None = None,
+    use_action_queue: bool = False,
 ) -> torch.Tensor:
     """Predict one denormalized 7-D absolute action on CPU."""
+    if use_action_queue and bundle.action_queue:
+        return bundle.action_queue.popleft().clone()
     number_of_tasks = int(bundle.config["policy"]["number_of_tasks"])
     if not 0 <= task_index < number_of_tasks:
         raise ValueError(f"Task index {task_index} is outside [0, {number_of_tasks})")
@@ -524,7 +539,27 @@ def predict_action(
             if not 0.0 < gain <= 1.0:
                 raise ValueError("execution_delta_gain must be in (0, 1]")
             action = proprioception + gain * action
-    result = action[0].float().cpu()
+    action_chunk_size = int(policy_config.get("action_chunk_size", 1))
+    if action_chunk_size > 1:
+        expected = action_chunk_size * 7
+        if action.shape != (1, expected):
+            raise RuntimeError(
+                f"Chunked policy produced {tuple(action.shape)}, expected (1, {expected})"
+            )
+        chunk = action.reshape(action_chunk_size, 7).float().cpu()
+        execute_steps = int(policy_config["action_steps_per_inference"])
+        if use_action_queue:
+            bundle.action_queue.extend(chunk[index] for index in range(execute_steps))
+            result = bundle.action_queue.popleft().clone()
+        else:
+            result = chunk[0]
+    else:
+        result = action[0].float().cpu()
     if result.shape != (7,) or not torch.isfinite(result).all():
         raise RuntimeError(f"Policy produced an invalid action: {result}")
     return result
+
+
+def reset_action_queue(bundle: PolicyBundle) -> None:
+    """Discard cached chunk actions before starting a new rollout."""
+    bundle.action_queue.clear()

@@ -21,14 +21,21 @@ class EpisodeRecord:
 
     @property
     def parquet_path(self) -> Path:
-        return self.task_root / "data" / "chunk-000" / (
-            f"episode_{self.episode_index:06d}.parquet"
+        return (
+            self.task_root
+            / "data"
+            / "chunk-000"
+            / (f"episode_{self.episode_index:06d}.parquet")
         )
 
     def video_path(self, camera: str) -> Path:
-        return self.task_root / "videos" / "chunk-000" / (
-            f"observation.images.{camera}"
-        ) / f"episode_{self.episode_index:06d}.mp4"
+        return (
+            self.task_root
+            / "videos"
+            / "chunk-000"
+            / (f"observation.images.{camera}")
+            / f"episode_{self.episode_index:06d}.mp4"
+        )
 
 
 def build_episode_records(
@@ -72,8 +79,11 @@ def build_episode_records(
 
 
 def cache_shard_path(cache_root: str | Path, record: EpisodeRecord) -> Path:
-    return Path(cache_root) / record.split / f"task_{record.task_index}" / (
-        f"episode_{record.episode_index:06d}.pt"
+    return (
+        Path(cache_root)
+        / record.split
+        / f"task_{record.task_index}"
+        / (f"episode_{record.episode_index:06d}.pt")
     )
 
 
@@ -97,12 +107,9 @@ def load_cached_split(
         paths = [
             path
             for path in paths
-            if int(path.parent.name.removeprefix("task_"))
-            in episode_ids_by_task
+            if int(path.parent.name.removeprefix("task_")) in episode_ids_by_task
             and int(path.stem.removeprefix("episode_"))
-            in episode_ids_by_task[
-                int(path.parent.name.removeprefix("task_"))
-            ]
+            in episode_ids_by_task[int(path.parent.name.removeprefix("task_"))]
         ]
     if not paths:
         raise FileNotFoundError(f"No cached {split} episodes under {cache_root}")
@@ -127,6 +134,73 @@ def load_cached_split(
     }
 
 
+def load_cached_absolute_chunk_split(
+    cache_root: str | Path,
+    split: str,
+    chunk_size: int,
+    episode_ids_by_task: dict[int, set[int]] | None = None,
+) -> dict[str, torch.Tensor]:
+    """Load current observations paired with episode-local absolute action chunks.
+
+    Only complete chunks are retained. This deliberately avoids padding and a
+    mask so the basic MLP experiment changes only the prediction horizon.
+    Targets are flattened from ``[K, 7]`` to ``[K * 7]`` for a linear MLP head.
+    """
+    if chunk_size < 2:
+        raise ValueError("chunk_size must be at least two")
+    paths = sorted((Path(cache_root) / split).glob("task_*/episode_*.pt"))
+    if episode_ids_by_task is not None:
+        paths = [
+            path
+            for path in paths
+            if int(path.parent.name.removeprefix("task_")) in episode_ids_by_task
+            and int(path.stem.removeprefix("episode_"))
+            in episode_ids_by_task[int(path.parent.name.removeprefix("task_"))]
+        ]
+    if not paths:
+        raise FileNotFoundError(f"No cached {split} episodes under {cache_root}")
+
+    rows: list[dict[str, torch.Tensor]] = []
+    for path in paths:
+        payload = torch.load(path, map_location="cpu", weights_only=True)
+        required = {"cam_main", "cam_wrist", "action", "state", "task_index"}
+        if not isinstance(payload, dict) or not required.issubset(payload):
+            raise ValueError(f"Malformed feature-cache shard: {path}")
+        lengths = {int(payload[key].shape[0]) for key in required}
+        if len(lengths) != 1:
+            raise ValueError(f"Cached episode tensors have different lengths: {path}")
+        frames = lengths.pop()
+        samples = frames - chunk_size + 1
+        if samples <= 0:
+            raise ValueError(f"Cached episode is shorter than chunk_size: {path}")
+        actions = payload["action"].float()
+        chunks = torch.stack(
+            [actions[offset : offset + samples] for offset in range(chunk_size)],
+            dim=1,
+        )
+        rows.append(
+            {
+                "cam_main": payload["cam_main"][:samples],
+                "cam_wrist": payload["cam_wrist"][:samples],
+                "state": payload["state"][:samples].float(),
+                "action": chunks.reshape(samples, -1),
+                "task_index": payload["task_index"][:samples].long(),
+                "progress": _episode_progress(frames)[:samples],
+            }
+        )
+    return {
+        key: torch.cat([row[key] for row in rows])
+        for key in (
+            "cam_main",
+            "cam_wrist",
+            "state",
+            "action",
+            "task_index",
+            "progress",
+        )
+    }
+
+
 def load_cached_future_delta_split(
     cache_root: str | Path,
     split: str,
@@ -145,12 +219,9 @@ def load_cached_future_delta_split(
         paths = [
             path
             for path in paths
-            if int(path.parent.name.removeprefix("task_"))
-            in episode_ids_by_task
+            if int(path.parent.name.removeprefix("task_")) in episode_ids_by_task
             and int(path.stem.removeprefix("episode_"))
-            in episode_ids_by_task[
-                int(path.parent.name.removeprefix("task_"))
-            ]
+            in episode_ids_by_task[int(path.parent.name.removeprefix("task_"))]
         ]
     if not paths:
         raise FileNotFoundError(f"No cached {split} episodes under {cache_root}")
@@ -166,9 +237,7 @@ def load_cached_future_delta_split(
             raise ValueError(f"Cached episode tensors have different lengths: {path}")
         frames = lengths.pop()
         if frames <= lookahead_frames:
-            raise ValueError(
-                f"Cached episode {path} is shorter than its lookahead"
-            )
+            raise ValueError(f"Cached episode {path} is shorter than its lookahead")
         current = slice(None, -lookahead_frames)
         future = slice(lookahead_frames, None)
         rows.append(

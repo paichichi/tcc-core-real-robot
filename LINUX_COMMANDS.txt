@@ -1,9 +1,24 @@
-python scripts/fetch_policy_assets.py --config configs/experiment_v10_shared_rn50_main_wrist_residual_100.yaml --backbone ours_rn50 --demonstrations 100
+source .venv/bin/activate
+
+python scripts/cache_policy_features.py \
+  --config configs/experiment_v11_basic_chunked_mlp_100.yaml \
+  --hub-backbone ours_rn50 \
+  --dataset-root datasets/pick_and_place_4_object_diverse \
+  --tcc-source-root /home/robotarm/TCC-core \
+  --cache-root runs/feature_cache_v11_basic_chunked_mlp/ours_rn50/100 \
+  --device auto
+
+python scripts/train_policy.py \
+  --config configs/experiment_v11_basic_chunked_mlp_100.yaml \
+  --cache-root runs/feature_cache_v11_basic_chunked_mlp/ours_rn50/100 \
+  --output-dir runs/policies_v11_basic_chunked_mlp/ours_rn50/100 \
+  --device auto
 
 python scripts/run_policy.py \
-  --config configs/experiment_v10_shared_rn50_main_wrist_residual_100.yaml \
+  --config configs/experiment_v11_basic_chunked_mlp_100.yaml \
   --robot-config configs/robot.yaml \
   --backbone ours_rn50 \
+  --policy-checkpoint runs/policies_v11_basic_chunked_mlp/ours_rn50/100/checkpoint_best.pt \
   --demonstrations 100 \
   --task carrot \
   --camera-backend realsense-sdk \
@@ -14,32 +29,3 @@ python scripts/run_policy.py \
   --device auto \
   --execute-home \
   --max-steps 359
-
-python scripts/run_policy.py \
-  --config configs/experiment_v10_shared_rn50_main_wrist_residual_100.yaml \
-  --robot-config configs/robot.yaml \
-  --backbone ours_rn50 \
-  --demonstrations 100 \
-  --task carrot \
-  --camera-backend realsense-sdk \
-  --cam-main-serial 838212073584 \
-  --cam-wrist-serial 409122274608 \
-  --tcc-source-root /home/robotarm/TCC-core \
-  --offline \
-  --device auto \
-  --execute-policy \
-  --supervised-bounded-test \
-  --emergency-stop-ready \
-  --run-until-stopped \
-  --watchdog-seconds 300
-
-python scripts/eval_demo_first_frames.py \
-  --config configs/experiment_v10_shared_rn50_main_wrist_residual_100.yaml \
-  --backbone ours_rn50 \
-  --demonstrations 100 \
-  --task carrot \
-  --episodes 10 \
-  --split test \
-  --tcc-source-root /home/robotarm/TCC-core \
-  --offline \
-  --device auto

@@ -1,0 +1,89 @@
+project: tcc-core-real-robot
+seed: 292285
+
+dataset:
+  repository: UoA-Trossen-Arm/pick_and_place_4_object_diverse
+  revision: 6ce893dc73fc6310ccbd46786f71a03a5b6a3da2
+  local_root: datasets/pick_and_place_4_object_diverse
+  demonstrations_per_task: 100
+  action_leads_measured_state_frames: 2
+  tasks: [pick_and_place_carrot_100]
+
+observations:
+  fps: 20
+  cameras: [cam_main, cam_wrist]
+  resolution: [640, 480]
+
+backbone:
+  source: huggingface
+  hub_name: ours_rn50
+  checkpoint: null
+  tcc_source_root: TBD
+  frozen: true
+  image_size: 224
+  feature_cache_dtype: float16
+
+model_hub:
+  repository: Chipaipai/tcc-core-real-robot-policies
+  revision: a0d945f694a89bc90b1abdf0fe50b85ed89b495e
+  backbone_manifest: backbones/manifest.json
+  policy_checkpoint_template: policies_v11_basic_chunked_mlp/{backbone}/checkpoint_050000.pt
+  policy_metrics_template: policies_v11_basic_chunked_mlp/{backbone}/metrics.json
+  supported_backbones: [ours_rn50]
+  supported_demonstrations: [100]
+
+policy:
+  implementation: tcc_mlp_bc_v11_basic_chunked_absolute
+  architecture: pooled_feature_mlp
+  cameras: [cam_main]
+  shared_camera_backbone: true
+  camera_fusion: raw_concat
+  camera_projection_dim: 0
+  camera_gate_hidden_dim: 0
+  task_conditioning: one_hot
+  number_of_tasks: 1
+  proprioception: true
+  proprioception_dim: 7
+  normalize_state: true
+  progress_conditioning: null
+  progress_dim: 0
+  action_dim: 7
+  action_chunk_size: 40
+  action_steps_per_inference: 10
+  action_representation: absolute
+  action_space: joint_position
+  action_frame: joint
+  state_representation: measured_joint_position_6_plus_gripper
+  action_source: original_lerobot_action
+  action_leads_measured_state_frames: 2
+  action_adapter: trossen_joint_position_passthrough
+  driver_pose_representation: joint_position
+  rotation_velocity: false
+  gripper_action: position
+  action_distribution: deterministic
+  inference: deterministic_chunk_queue
+  hidden_dimensions: [256, 256]
+  activation: relu
+  input_batch_norm: false
+  input_layer_norm: false
+  output_layer_scale: 1.0
+  dropout: 0.0
+  normalize_actions: true
+  optimizer: adam
+  loss: mse
+  training_steps: 50000
+  batch_size: 32
+  learning_rate: 0.001
+  log_every: 1000
+  precision: float32
+
+evaluation:
+  max_rollout_steps: 359
+
+split:
+  protocol: trossen_train_validation_test_episode_holdout
+  shuffle_seed: 3904767649
+  train_episodes_per_task: 80
+  validation_episodes_per_task: 10
+  test_episodes_per_task: 10
+  unused_episodes_per_task: 0

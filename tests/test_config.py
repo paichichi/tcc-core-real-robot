@@ -137,6 +137,25 @@ def test_visual_absolute_60_policy_configuration() -> None:
     assert "horizon" not in policy
 
 
+def test_v11_is_a_basic_single_view_absolute_chunked_mlp() -> None:
+    config = load_yaml(ROOT / "configs" / "experiment_v11_basic_chunked_mlp_100.yaml")
+    policy = config["policy"]
+
+    assert config["backbone"]["hub_name"] == "ours_rn50"
+    assert config["backbone"]["frozen"] is True
+    assert policy["architecture"] == "pooled_feature_mlp"
+    assert policy["cameras"] == ["cam_main"]
+    assert policy["proprioception"] is True
+    assert policy["action_representation"] == "absolute"
+    assert policy["action_chunk_size"] == 40
+    assert policy["action_steps_per_inference"] == 10
+    assert policy["hidden_dimensions"] == [256, 256]
+    assert policy["input_batch_norm"] is False
+    assert policy["input_layer_norm"] is False
+    assert policy["loss"] == "mse"
+    assert policy["dropout"] == 0.0
+
+
 def test_proprio_absolute_60_policy_configuration() -> None:
     config = load_yaml(ROOT / "configs" / "experiment_proprio_absolute_60.yaml")
     policy = config["policy"]

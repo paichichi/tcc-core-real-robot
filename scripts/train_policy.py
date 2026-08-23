@@ -20,6 +20,7 @@ from tcc_real_robot.policy import (
     TCCMLPPolicy,
 )
 from tcc_real_robot.policy_data import (
+    load_cached_absolute_chunk_split,
     load_cached_current_delta_split,
     load_cached_future_delta_split,
     load_cached_split,
@@ -59,7 +60,7 @@ def evaluate_policy(
     """Evaluate normalized training loss and denormalized action-space MAE."""
     model.eval()
     loss_total = 0.0
-    absolute_error = torch.zeros(7, device=device)
+    absolute_error = torch.zeros(model.action_dim, device=device)
     examples = int(data["action"].shape[0])
     for start in range(0, examples, batch_size):
         stop = min(start + batch_size, examples)
@@ -162,7 +163,9 @@ def evaluate_conditioning_sensitivity(
             batch["cam_wrist"].float(),
             batch["task_index"],
             proprioception,
-            torch.roll(progress, shifts=shift, dims=0) if progress is not None else None,
+            torch.roll(progress, shifts=shift, dims=0)
+            if progress is not None
+            else None,
         )
         prediction = normalizer.denormalize(prediction)
         visual_delta += torch.sum(
@@ -178,18 +181,18 @@ def evaluate_conditioning_sensitivity(
             torch.abs(prediction - normalizer.denormalize(shuffled_progress)), dim=0
         )
     return {
-        "validation_visual_shuffle_action_delta": (
-            visual_delta / examples
-        ).cpu().tolist(),
-        "validation_main_camera_shuffle_action_delta": (
-            main_visual_delta / examples
-        ).cpu().tolist(),
-        "validation_wrist_camera_shuffle_action_delta": (
-            wrist_visual_delta / examples
-        ).cpu().tolist(),
-        "validation_progress_shuffle_action_delta": (
-            progress_delta / examples
-        ).cpu().tolist(),
+        "validation_visual_shuffle_action_delta": (visual_delta / examples)
+        .cpu()
+        .tolist(),
+        "validation_main_camera_shuffle_action_delta": (main_visual_delta / examples)
+        .cpu()
+        .tolist(),
+        "validation_wrist_camera_shuffle_action_delta": (wrist_visual_delta / examples)
+        .cpu()
+        .tolist(),
+        "validation_progress_shuffle_action_delta": (progress_delta / examples)
+        .cpu()
+        .tolist(),
     }
 
 
@@ -268,6 +271,9 @@ def main() -> None:
     if policy_config.get("normalize_actions", True) is not True:
         raise ValueError("This trainer requires per-dimension action normalization")
     action_representation = policy_config.get("action_representation", "absolute")
+    action_chunk_size = int(policy_config.get("action_chunk_size", 1))
+    if action_chunk_size < 1:
+        raise ValueError("action_chunk_size must be positive")
     uses_proprioception = policy_config.get("proprioception") is True
     if action_representation == "future_delta":
         if not uses_proprioception:
@@ -282,9 +288,7 @@ def main() -> None:
         validation = load_cached_future_delta_split(
             args.cache_root, "validation", lookahead_frames
         )
-        test = load_cached_future_delta_split(
-            args.cache_root, "test", lookahead_frames
-        )
+        test = load_cached_future_delta_split(args.cache_root, "test", lookahead_frames)
     elif action_representation == "current_delta":
         if not uses_proprioception:
             raise ValueError("current_delta training requires proprioception")
@@ -296,21 +300,31 @@ def main() -> None:
         validation = load_cached_current_delta_split(args.cache_root, "validation")
         test = load_cached_current_delta_split(args.cache_root, "test")
     elif action_representation == "absolute":
-        train = load_cached_split(
-            args.cache_root,
-            "train",
-            episode_ids_by_task=selected_episode_ids,
-        )
-        validation = load_cached_split(args.cache_root, "validation")
-        test = load_cached_split(args.cache_root, "test")
+        if action_chunk_size == 1:
+            train = load_cached_split(
+                args.cache_root,
+                "train",
+                episode_ids_by_task=selected_episode_ids,
+            )
+            validation = load_cached_split(args.cache_root, "validation")
+            test = load_cached_split(args.cache_root, "test")
+        else:
+            train = load_cached_absolute_chunk_split(
+                args.cache_root,
+                "train",
+                action_chunk_size,
+                episode_ids_by_task=selected_episode_ids,
+            )
+            validation = load_cached_absolute_chunk_split(
+                args.cache_root, "validation", action_chunk_size
+            )
+            test = load_cached_absolute_chunk_split(
+                args.cache_root, "test", action_chunk_size
+            )
     else:
-        raise ValueError(
-            f"Unsupported action_representation: {action_representation}"
-        )
+        raise ValueError(f"Unsupported action_representation: {action_representation}")
     feature_dim = int(train["cam_main"].shape[1])
-    camera_names = tuple(
-        policy_config.get("cameras", ("cam_main", "cam_wrist"))
-    )
+    camera_names = tuple(policy_config.get("cameras", ("cam_main", "cam_wrist")))
     camera_fusion = policy_config.get("camera_fusion", "raw_concat")
     camera_projection_dim = int(policy_config.get("camera_projection_dim", 0))
     camera_gate_hidden_dim = int(policy_config.get("camera_gate_hidden_dim", 0))
@@ -338,9 +352,7 @@ def main() -> None:
     if "cam_wrist" in camera_names and train["cam_wrist"].shape[1] != feature_dim:
         raise ValueError("Camera feature dimensions differ")
 
-    action_distribution = str(
-        policy_config.get("action_distribution", "deterministic")
-    )
+    action_distribution = str(policy_config.get("action_distribution", "deterministic"))
     if action_distribution == "deterministic":
         model_class = TCCMLPPolicy
     elif action_distribution == "gaussian_mixture":
@@ -353,10 +365,12 @@ def main() -> None:
             "num_modes": int(policy_config.get("num_modes", 5)),
             "min_std": float(policy_config.get("min_std", 1e-4)),
         }
+    single_action_dim = int(policy_config["action_dim"])
+    model_action_dim = single_action_dim * action_chunk_size
     model = model_class(
         feature_dim=feature_dim,
         num_tasks=int(policy_config["number_of_tasks"]),
-        action_dim=int(policy_config["action_dim"]),
+        action_dim=model_action_dim,
         hidden_dims=tuple(policy_config["hidden_dimensions"]),
         proprio_dim=(
             int(policy_config.get("proprioception_dim", 7))
@@ -365,8 +379,7 @@ def main() -> None:
         ),
         progress_dim=(
             1
-            if policy_config.get("progress_conditioning")
-            == "normalized_episode_time"
+            if policy_config.get("progress_conditioning") == "normalized_episode_time"
             else 0
         ),
         input_batch_norm=bool(policy_config["input_batch_norm"]),

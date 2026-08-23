@@ -63,6 +63,54 @@ def checkpoint_payload() -> dict:
     }
 
 
+def chunked_checkpoint_payload() -> dict:
+    model = TCCMLPPolicy(
+        feature_dim=3,
+        num_tasks=1,
+        action_dim=21,
+        hidden_dims=(8, 8),
+        proprio_dim=7,
+        input_batch_norm=False,
+        camera_names=("cam_main",),
+    )
+    for parameter in model.parameters():
+        torch.nn.init.zeros_(parameter)
+    output_layer = model.mlp[-1]
+    assert isinstance(output_layer, torch.nn.Linear)
+    with torch.no_grad():
+        output_layer.bias.copy_(torch.arange(21, dtype=torch.float32))
+    return {
+        "model": model.state_dict(),
+        "action_mean": torch.zeros(21),
+        "action_std": torch.ones(21),
+        "state_mean": torch.zeros(7),
+        "state_std": torch.ones(7),
+        "feature_dim": 3,
+        "config": {
+            "dataset": {"tasks": ["carrot"]},
+            "policy": {
+                "architecture": "pooled_feature_mlp",
+                "number_of_tasks": 1,
+                "action_dim": 7,
+                "action_chunk_size": 3,
+                "action_steps_per_inference": 2,
+                "action_representation": "absolute",
+                "action_distribution": "deterministic",
+                "hidden_dimensions": [8, 8],
+                "input_batch_norm": False,
+                "input_layer_norm": False,
+                "proprioception": True,
+                "proprioception_dim": 7,
+                "cameras": ["cam_main"],
+                "camera_fusion": "raw_concat",
+                "camera_projection_dim": 0,
+                "camera_gate_hidden_dim": 0,
+            },
+        },
+        "step": 50_000,
+    }
+
+
 def r3m_robomimic_checkpoint_payload() -> dict:
     model = R3MRobomimicPolicy(feature_dim=3)
     for parameter in model.parameters():
@@ -324,6 +372,35 @@ def test_restore_and_predict_denormalized_action(tmp_path: Path) -> None:
     )
     assert action.shape == (7,)
     assert torch.isfinite(action).all()
+
+
+def test_chunked_policy_reuses_configured_actions_only_during_rollout(
+    tmp_path: Path,
+) -> None:
+    checkpoint = tmp_path / "chunked_policy.pt"
+    torch.save(chunked_checkpoint_payload(), checkpoint)
+    bundle = load_policy_bundle(
+        checkpoint, expected_feature_dim=3, device=torch.device("cpu")
+    )
+    frame = np.zeros((48, 64, 3), dtype=np.uint8)
+    kwargs = {
+        "backbone": MeanBackbone().eval(),
+        "bundle": bundle,
+        "cam_main_rgb": frame,
+        "cam_wrist_rgb": frame,
+        "task_index": 0,
+        "image_size": 32,
+        "device": torch.device("cpu"),
+        "observation_state": torch.zeros(7),
+    }
+
+    first = predict_action(**kwargs, use_action_queue=True)
+    second = predict_action(**kwargs, use_action_queue=True)
+    stateless = predict_action(**kwargs)
+
+    assert torch.equal(first, torch.arange(7, dtype=torch.float32))
+    assert torch.equal(second, torch.arange(7, 14, dtype=torch.float32))
+    assert torch.equal(stateless, torch.arange(7, dtype=torch.float32))
 
 
 def test_restore_and_predict_v6_gated_multiview_action(tmp_path: Path) -> None:
