@@ -4,10 +4,55 @@ torch = pytest.importorskip("torch")
 
 from tcc_real_robot.policy import (
     ActionNormalizer,
+    MainWristResidualPolicy,
     R3MRobomimicPolicy,
     TCCMLPGaussianMixturePolicy,
     TCCMLPPolicy,
 )
+
+
+def test_main_wrist_residual_policy_is_main_dominant_and_bounded() -> None:
+    policy = MainWristResidualPolicy(
+        feature_dim=8,
+        projection_dim=4,
+        gate_hidden_dim=5,
+        wrist_dropout=0.0,
+        wrist_residual_scale=0.25,
+        gate_initial_bias=-2.0,
+    ).eval()
+    main = torch.randn(3, 8)
+    wrist = torch.randn(3, 8)
+    state = torch.randn(3, 7)
+
+    output, main_action, correction, gate = policy.forward_components(
+        main, wrist, state
+    )
+
+    assert output.shape == (3, 7)
+    assert main_action.shape == (3, 7)
+    assert correction.shape == (3, 7)
+    assert gate.shape == (3, 1)
+    assert torch.all(correction.abs() <= 0.25)
+    assert torch.all((gate > 0.0) & (gate < 1.0))
+    assert torch.allclose(output, main_action + gate * correction)
+    assert torch.allclose(gate, torch.full_like(gate, torch.sigmoid(torch.tensor(-2.0))))
+
+
+def test_main_wrist_residual_policy_wrist_dropout_disables_correction() -> None:
+    policy = MainWristResidualPolicy(
+        feature_dim=8,
+        projection_dim=4,
+        gate_hidden_dim=5,
+        wrist_dropout=0.999999,
+    ).train()
+    torch.manual_seed(0)
+
+    output, main_action, _, gate = policy.forward_components(
+        torch.randn(32, 8), torch.randn(32, 8), torch.randn(32, 7)
+    )
+
+    assert torch.equal(gate, torch.zeros_like(gate))
+    assert torch.equal(output, main_action)
 
 
 def test_two_camera_policy_predicts_one_action() -> None:

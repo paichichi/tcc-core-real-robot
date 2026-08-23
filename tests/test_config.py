@@ -371,3 +371,48 @@ def test_v9_proprio_adds_closed_loop_state_without_changing_action_contract() ->
         "i10000_closed_loop/checkpoint_010000.pt"
     )
     assert config["model_hub"]["supported_backbones"] == ["ours_rn50"]
+
+
+def test_v10_uses_shared_rn50_and_main_dominant_wrist_residual() -> None:
+    config = load_yaml(
+        ROOT
+        / "configs"
+        / "experiment_v10_shared_rn50_main_wrist_residual_100.yaml"
+    )
+    policy = config["policy"]
+
+    assert config["model_hub"]["supported_backbones"] == ["ours_rn50"]
+    assert config["backbone"]["frozen"] is False
+    assert config["backbone"]["fine_tuning"] == (
+        "shared_full_end_to_end_freeze_batch_norm_statistics"
+    )
+    assert policy["shared_camera_backbone"] is True
+    assert policy["camera_fusion"] == (
+        "main_policy_with_gated_wrist_action_residual"
+    )
+    assert policy["proprioception"] is True
+    assert policy["action_representation"] == "absolute"
+    assert policy["action_chunk_size"] == 1
+    assert policy["wrist_dropout"] == 0.2
+    assert policy["wrist_residual_scale"] == 0.25
+    assert policy["gate_initial_bias"] == -2.0
+    assert policy["main_loss_weight"] == 0.5
+    assert policy["residual_regularization_weight"] == 0.01
+    assert policy["checkpoint_every"] == 5000
+    assert "eval_every" not in policy
+    assert config["split"] == {
+        "protocol": "trossen_train_test_episode_holdout",
+        "shuffle_seed": 3904767649,
+        "train_episodes_per_task": 90,
+        "validation_episodes_per_task": 0,
+        "test_episodes_per_task": 10,
+    }
+    assert config["augmentation"] == {
+        "scope": "train_only_independent_per_camera",
+        "spatial_transforms": False,
+        "brightness": 0.15,
+        "contrast": 0.15,
+        "saturation": 0.10,
+        "hue": 0.02,
+        "blur_probability": 0.10,
+    }

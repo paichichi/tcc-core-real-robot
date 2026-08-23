@@ -1,29 +1,46 @@
 # Real-Robot Policy Training and Evaluation
 
-## 当前实验：V9 minimal R3M + robomimic independent encoders
+## 当前实验：V10 shared RN50 + main policy + gated wrist residual
 
-当前配置为 `configs/experiment_v9_r3m_robomimic_100.yaml`。V9 只保留 R3M
-downstream policy 的确定性 MLP，以及 robomimic 多视角设计中的独立相机 encoder：
-`cam_main` 和 `cam_wrist` 从同一 source checkpoint 初始化，但参数完全独立并端到端
-微调。两路 pooled feature 直接拼接后进入 `BatchNorm -> 256 -> ReLU -> 256 ->
-ReLU -> 7`，不使用 feature projection、task token、proprioception、progress、
-dropout、mixture distribution、加权采样或训练图像增强。
+当前配置为
+`configs/experiment_v10_shared_rn50_main_wrist_residual_100.yaml`。V10 只测试
+`ours_rn50`，两路相机共享同一个 RN50 并端到端微调；预训练 BatchNorm running
+statistics 保持冻结。`cam_main` 独立预测完整 7 维动作，`cam_wrist` 只产生有界动作
+修正：
+
+```text
+action = main_action + sigmoid(gate) * 0.25 * tanh(wrist_correction)
+```
+
+main 和 wrist 使用独立 projection head，但共享视觉 backbone。gate 初始 bias 为
+`-2.0`，训练时以 `0.2` 概率屏蔽 wrist，使主视角始终能够单独完成全局定位和运动，
+腕部视角只补充接近、对准和抓取阶段的局部信息。
+
+训练图像在送入共享 RN50 前加入 train-only 光度增强：brightness/contrast
+各 `0.15`、saturation `0.10`、hue `0.02`，以及 `0.10` 概率的轻微 Gaussian
+blur。两路相机独立采样增强，以覆盖 D435/D405 不同的颜色与曝光响应。validation、
+test 和实机 eval 仍使用完全确定性的 resize + ImageNet normalization。V10 不使用
+flip、rotation 或 random crop，避免改变图像坐标却保留原 absolute-action label。
 
 训练目标就是数据集原始 `action[t]`：6 维关节绝对目标（rad）加 1 维夹爪绝对目标
 （m）。只使用 train episode 的逐维 action mean/std 做 normalization；runtime
 denormalize 后直接交给现有 Trossen joint-position 安全层和
-`set_all_positions(target, goal_time, False)`。V9 不使用 delta adapter、Cartesian
+`set_all_positions(target, goal_time, False)`。V10 不使用 delta adapter、Cartesian
 velocity 或 IK。
 
-100 个 demo 按完整 episode 固定划分为 80/10/10，避免帧泄漏。默认训练为 50K
-steps、batch size 32、MLP Adam learning rate `1e-3`、backbone learning rate
-`1e-5`、MSE loss；根据 validation normalized MSE 保存 `checkpoint_best.pt`。
+100 个 demo 按完整 episode 固定划分为 90/10 train/test，避免帧泄漏。V10 不使用
+validation 或 early stopping：训练固定为 50K steps，部署固定使用最后的
+`checkpoint_050000.pt`，test 只在训练结束后评估一次，不能根据 test 指标选择
+checkpoint。batch size 为 32；policy head、projection/gate、backbone 的 learning
+rate 分别为 `1e-3`、`1e-4`、`1e-5`。损失由 fused action MSE、main-only
+auxiliary MSE 和 wrist residual regularization 组成。每 5K 步保存恢复用 checkpoint，
+但不在它们之间选择“最佳”模型。
 
 完整训练和本地 checkpoint 离线闸门命令放在 `LINUX_COMMANDS.txt`。首帧诊断会
 比较预测绝对目标与 demo 记录目标；超过记录首步 envelope 的模型会得到
 `Decision: BLOCKED`，不应进入实机 rollout。
 
-## 历史实验：V6 R3M-style behavior cloning
+## 历史实验：V9 independent encoders 与 V6 gated features
 
 ## 上一版实验：v3 proprioception + absolute action
 

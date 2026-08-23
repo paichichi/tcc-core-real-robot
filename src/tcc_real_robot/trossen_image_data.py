@@ -93,8 +93,11 @@ def episode_split_indices(
 ) -> tuple[list[int], list[int], list[int]]:
     """Return leak-free positional indices split by complete episodes."""
     sizes = (train_episodes, validation_episodes, test_episodes)
-    if any(size <= 0 for size in sizes):
-        raise ValueError("Every episode split must be positive")
+    if train_episodes <= 0 or validation_episodes < 0 or test_episodes <= 0:
+        raise ValueError(
+            "Train/test episode splits must be positive and validation cannot "
+            "be negative"
+        )
     path = Path(database).expanduser().resolve()
     with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as connection:
         rows = [

@@ -1,0 +1,104 @@
+project: tcc-core-real-robot
+seed: 292285
+
+dataset:
+  repository: UoA-Trossen-Arm/pick_and_place_4_object_diverse
+  revision: 6ce893dc73fc6310ccbd46786f71a03a5b6a3da2
+  local_root: datasets/pick_and_place_4_object_diverse
+  demonstrations_per_task: 100
+  state_semantics: measured_joint_position_6_plus_gripper
+  action_semantics: commanded_joint_position_6_plus_gripper
+  action_source: original_lerobot_action_column
+  tasks:
+    - pick_and_place_carrot_100
+
+observations:
+  fps: 20
+  cameras: [cam_main, cam_wrist]
+  resolution: [640, 480]
+
+augmentation:
+  scope: train_only_independent_per_camera
+  spatial_transforms: false
+  brightness: 0.15
+  contrast: 0.15
+  saturation: 0.10
+  hue: 0.02
+  blur_probability: 0.10
+
+backbone:
+  source: huggingface
+  hub_name: ours_rn50
+  checkpoint: null
+  tcc_source_root: TBD
+  frozen: false
+  fine_tuning: shared_full_end_to_end_freeze_batch_norm_statistics
+  image_size: 224
+
+model_hub:
+  repository: Chipaipai/tcc-core-real-robot-policies
+  revision: 59eaf7c32669910b2837a0821cf51b5ed2286401
+  backbone_manifest: backbones/manifest.json
+  policy_checkpoint_template: policies_v10_shared_rn50_main_wrist_residual/{backbone}/checkpoint_050000.pt
+  policy_metrics_template: policies_v10_shared_rn50_main_wrist_residual/{backbone}/metrics.json
+  supported_backbones: [ours_rn50]
+  supported_demonstrations: [100]
+
+policy:
+  implementation: tcc_mlp_bc_v10_shared_rn50_main_wrist_residual
+  architecture: r3m_deterministic_mlp_shared_rn50_main_gated_wrist_residual_proprio
+  architecture_reference: main_global_policy_plus_bounded_gated_wrist_action_residual
+  cameras: [cam_main, cam_wrist]
+  shared_camera_backbone: true
+  camera_fusion: main_policy_with_gated_wrist_action_residual
+  camera_projection_dim: 128
+  camera_gate_hidden_dim: 128
+  number_of_tasks: 1
+  action_dim: 7
+  action_chunk_size: 1
+  action_representation: absolute
+  action_space: joint_position
+  action_frame: joint
+  state_representation: measured_joint_position_6_plus_gripper
+  proprioception: true
+  proprioception_dim: 7
+  normalize_state: true
+  action_source: original_lerobot_action
+  action_adapter: trossen_joint_position_passthrough
+  gripper_action: position
+  action_distribution: deterministic
+  deterministic_inference: direct_main_plus_gated_wrist_residual
+  inference: deterministic
+  hidden_dimensions: [256, 256]
+  activation: relu
+  input_batch_norm: true
+  output_layer_scale: 0.01
+  wrist_dropout: 0.2
+  wrist_residual_scale: 0.25
+  gate_initial_bias: -2.0
+  normalize_actions: true
+  optimizer: adamw
+  weight_decay: 0.0001
+  loss: main_auxiliary_mse_plus_fused_mse_plus_residual_regularization
+  main_loss_weight: 0.5
+  residual_regularization_weight: 0.01
+  training_steps: 50000
+  batch_size: 32
+  learning_rate: 0.001
+  fusion_learning_rate: 0.0001
+  backbone_learning_rate: 0.00001
+  gradient_clip_norm: 1.0
+  precision: float32
+  num_workers: 10
+  checkpoint_every: 5000
+
+evaluation:
+  max_rollout_steps: 359
+  first_frame_recorded_envelope_multiplier: 2.0
+
+split:
+  protocol: trossen_train_test_episode_holdout
+  shuffle_seed: 3904767649
+  train_episodes_per_task: 90
+  validation_episodes_per_task: 0
+  test_episodes_per_task: 10

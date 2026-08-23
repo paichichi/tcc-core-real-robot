@@ -7,6 +7,7 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from tcc_real_robot.policy import (
+    MainWristResidualPolicy,
     R3MRobomimicPolicy,
     TCCMLPGaussianMixturePolicy,
     TCCMLPPolicy,
@@ -129,6 +130,59 @@ def r3m_robomimic_proprio_checkpoint_payload() -> dict:
             },
         },
         "step": 5_000,
+    }
+
+
+def v10_checkpoint_payload() -> dict:
+    model = MainWristResidualPolicy(
+        feature_dim=3,
+        projection_dim=4,
+        gate_hidden_dim=5,
+        wrist_dropout=0.2,
+        wrist_residual_scale=0.25,
+        gate_initial_bias=-2.0,
+    )
+    for parameter in model.parameters():
+        torch.nn.init.zeros_(parameter)
+    return {
+        "model": model.state_dict(),
+        "action_mean": torch.full((7,), 0.25),
+        "action_std": torch.ones(7),
+        "state_mean": torch.zeros(7),
+        "state_std": torch.ones(7),
+        "feature_dim": 3,
+        "config": {
+            "dataset": {"tasks": ["carrot"]},
+            "policy": {
+                "architecture": (
+                    "r3m_deterministic_mlp_shared_rn50_main_gated_"
+                    "wrist_residual_proprio"
+                ),
+                "number_of_tasks": 1,
+                "action_dim": 7,
+                "action_chunk_size": 1,
+                "action_representation": "absolute",
+                "action_distribution": "deterministic",
+                "hidden_dimensions": [256, 256],
+                "output_layer_scale": 0.01,
+                "input_batch_norm": True,
+                "proprioception": True,
+                "proprioception_dim": 7,
+                "cameras": ["cam_main", "cam_wrist"],
+                "shared_camera_backbone": True,
+                "camera_fusion": (
+                    "main_policy_with_gated_wrist_action_residual"
+                ),
+                "camera_projection_dim": 4,
+                "camera_gate_hidden_dim": 5,
+                "wrist_dropout": 0.2,
+                "wrist_residual_scale": 0.25,
+                "gate_initial_bias": -2.0,
+                "main_loss_weight": 0.5,
+                "residual_regularization_weight": 0.01,
+            },
+        },
+        "step": 50_000,
     }
 
 
@@ -508,6 +562,31 @@ def test_r3m_robomimic_proprio_checkpoint_requires_and_uses_state(
         device=torch.device("cpu"),
         observation_state=np.zeros(7, dtype=np.float32),
     )
+    assert torch.allclose(action, torch.full((7,), 0.25))
+
+
+def test_v10_shared_backbone_checkpoint_predicts_absolute_joint_goal(
+    tmp_path: Path,
+) -> None:
+    checkpoint = tmp_path / "v10.pt"
+    torch.save(v10_checkpoint_payload(), checkpoint)
+    bundle = load_policy_bundle(
+        checkpoint, expected_feature_dim=3, device=torch.device("cpu")
+    )
+    frame = np.zeros((48, 64, 3), dtype=np.uint8)
+
+    action = predict_action(
+        MeanBackbone().eval(),
+        bundle,
+        frame,
+        frame,
+        task_index=0,
+        image_size=32,
+        device=torch.device("cpu"),
+        observation_state=np.zeros(7, dtype=np.float32),
+    )
+
+    assert isinstance(bundle.model, MainWristResidualPolicy)
     assert torch.allclose(action, torch.full((7,), 0.25))
 
 

@@ -102,6 +102,153 @@ class R3MRobomimicPolicy(nn.Module):
         return self.mlp(torch.cat(conditioning, dim=-1))
 
 
+class MainWristResidualPolicy(nn.Module):
+    """Main-view policy with a bounded, gated wrist-camera action residual."""
+
+    camera_names = ("cam_main", "cam_wrist")
+    camera_fusion = "main_policy_with_gated_wrist_action_residual"
+    progress_dim = 0
+
+    def __init__(
+        self,
+        feature_dim: int,
+        action_dim: int = 7,
+        hidden_dims: Sequence[int] = (256, 256),
+        projection_dim: int = 128,
+        gate_hidden_dim: int = 128,
+        proprio_dim: int = 7,
+        wrist_dropout: float = 0.2,
+        wrist_residual_scale: float = 0.25,
+        gate_initial_bias: float = -2.0,
+        output_layer_scale: float = 0.01,
+    ) -> None:
+        super().__init__()
+        if min(feature_dim, action_dim, projection_dim, gate_hidden_dim) < 1:
+            raise ValueError("Feature, action, projection, and gate dimensions must be positive")
+        if not hidden_dims or any(width < 1 for width in hidden_dims):
+            raise ValueError("Policy requires positive hidden dimensions")
+        if proprio_dim < 1:
+            raise ValueError("V10 requires positive-dimensional proprioception")
+        if not 0.0 <= wrist_dropout < 1.0:
+            raise ValueError("Wrist dropout must be in [0, 1)")
+        if wrist_residual_scale <= 0.0:
+            raise ValueError("Wrist residual scale must be positive")
+        if output_layer_scale <= 0.0:
+            raise ValueError("Output-layer scale must be positive")
+
+        self.feature_dim = feature_dim
+        self.action_dim = action_dim
+        self.proprio_dim = proprio_dim
+        self.camera_projection_dim = projection_dim
+        self.camera_gate_hidden_dim = gate_hidden_dim
+        self.wrist_dropout = wrist_dropout
+        self.wrist_residual_scale = wrist_residual_scale
+        self.cam_main_projection = self._projection(feature_dim, projection_dim)
+        self.cam_wrist_projection = self._projection(feature_dim, projection_dim)
+        main_input_dim = projection_dim + proprio_dim
+        residual_input_dim = 2 * projection_dim + proprio_dim
+        self.main_policy = self._mlp(
+            main_input_dim, hidden_dims, action_dim, output_layer_scale
+        )
+        self.wrist_residual_policy = self._mlp(
+            residual_input_dim, hidden_dims, action_dim, output_layer_scale
+        )
+        self.camera_gate = nn.Sequential(
+            nn.Linear(residual_input_dim, gate_hidden_dim),
+            nn.ReLU(),
+            nn.Linear(gate_hidden_dim, 1),
+        )
+        gate_output = self.camera_gate[-1]
+        if not isinstance(gate_output, nn.Linear):
+            raise TypeError("Expected the camera gate to end in a linear layer")
+        with torch.no_grad():
+            gate_output.weight.zero_()
+            gate_output.bias.fill_(gate_initial_bias)
+
+    @staticmethod
+    def _projection(feature_dim: int, projection_dim: int) -> nn.Sequential:
+        return nn.Sequential(
+            nn.Linear(feature_dim, projection_dim),
+            nn.LayerNorm(projection_dim),
+            nn.ReLU(),
+        )
+
+    @staticmethod
+    def _mlp(
+        input_dim: int,
+        hidden_dims: Sequence[int],
+        output_dim: int,
+        output_layer_scale: float,
+    ) -> nn.Sequential:
+        layers: list[nn.Module] = [nn.BatchNorm1d(input_dim)]
+        previous = input_dim
+        for width in hidden_dims:
+            layers.extend((nn.Linear(previous, width), nn.ReLU()))
+            previous = width
+        output = nn.Linear(previous, output_dim)
+        with torch.no_grad():
+            output.weight.mul_(output_layer_scale)
+            if output.bias is not None:
+                output.bias.mul_(output_layer_scale)
+        layers.append(output)
+        return nn.Sequential(*layers)
+
+    def forward_components(
+        self,
+        cam_main: torch.Tensor,
+        cam_wrist: torch.Tensor,
+        proprioception: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Return final action, main action, bounded correction, and scalar gate."""
+        if (
+            cam_main.ndim != 2
+            or cam_main.shape[1] != self.feature_dim
+            or cam_wrist.shape != cam_main.shape
+        ):
+            raise ValueError(
+                "Camera features must be matching "
+                f"[B, {self.feature_dim}] tensors"
+            )
+        if proprioception.shape != (cam_main.shape[0], self.proprio_dim):
+            raise ValueError("Unexpected proprioception shape")
+        main_embedding = self.cam_main_projection(cam_main)
+        wrist_embedding = self.cam_wrist_projection(cam_wrist)
+        if self.training and self.wrist_dropout:
+            keep = torch.rand(
+                (cam_main.shape[0], 1),
+                device=cam_main.device,
+                dtype=cam_main.dtype,
+            ) >= self.wrist_dropout
+            wrist_embedding = wrist_embedding * keep
+        else:
+            keep = torch.ones(
+                (cam_main.shape[0], 1),
+                device=cam_main.device,
+                dtype=cam_main.dtype,
+            )
+        main_action = self.main_policy(
+            torch.cat([main_embedding, proprioception], dim=-1)
+        )
+        residual_inputs = torch.cat(
+            [main_embedding, wrist_embedding, proprioception], dim=-1
+        )
+        gate = torch.sigmoid(self.camera_gate(residual_inputs)) * keep
+        correction = (
+            torch.tanh(self.wrist_residual_policy(residual_inputs))
+            * self.wrist_residual_scale
+        )
+        final_action = main_action + gate * correction
+        return final_action, main_action, correction, gate
+
+    def forward(
+        self,
+        cam_main: torch.Tensor,
+        cam_wrist: torch.Tensor,
+        proprioception: torch.Tensor,
+    ) -> torch.Tensor:
+        return self.forward_components(cam_main, cam_wrist, proprioception)[0]
+
+
 class TCCMLPPolicy(nn.Module):
     """Predict one action from configured frozen features and optional state."""
 

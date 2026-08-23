@@ -13,6 +13,7 @@ from torchvision.transforms import functional as vision_f
 
 from tcc_real_robot.policy import (
     ActionNormalizer,
+    MainWristResidualPolicy,
     R3MRobomimicPolicy,
     TCCMLPGaussianMixturePolicy,
     TCCMLPPolicy,
@@ -30,7 +31,7 @@ _NORMALIZATION_CACHE: dict[
 class PolicyBundle:
     """A restored policy head and the action normalizer saved with it."""
 
-    model: TCCMLPPolicy | R3MRobomimicPolicy
+    model: TCCMLPPolicy | R3MRobomimicPolicy | MainWristResidualPolicy
     normalizer: ActionNormalizer
     state_normalizer: ActionNormalizer | None
     config: dict[str, Any]
@@ -50,6 +51,11 @@ def validate_policy_contract(
         "camera_fusion",
         "camera_projection_dim",
         "camera_gate_hidden_dim",
+        "wrist_dropout",
+        "wrist_residual_scale",
+        "gate_initial_bias",
+        "main_loss_weight",
+        "residual_regularization_weight",
         "proprioception",
         "proprioception_dim",
         "action_representation",
@@ -170,6 +176,7 @@ def load_policy_bundle(
         "raw_concat",
         "project_then_concat",
         "gated_residual",
+        "main_policy_with_gated_wrist_action_residual",
     }:
         raise ValueError(f"Unsupported camera fusion: {camera_fusion}")
     if camera_fusion == "raw_concat" and camera_projection_dim:
@@ -225,11 +232,39 @@ def load_policy_bundle(
     if int(policy_config.get("progress_dim", progress_dim)) != progress_dim:
         raise ValueError("Checkpoint progress_dim disagrees with progress_conditioning")
     architecture = str(policy_config.get("architecture", "pooled_feature_mlp"))
+    v10_architecture = (
+        "r3m_deterministic_mlp_shared_rn50_main_gated_wrist_residual_proprio"
+    )
     r3m_architectures = {
         "r3m_deterministic_mlp_dual_independent_encoder": False,
         "r3m_deterministic_mlp_dual_independent_encoder_proprio": True,
     }
-    if architecture in r3m_architectures:
+    if architecture == v10_architecture:
+        if (
+            camera_names != ("cam_main", "cam_wrist")
+            or not uses_proprioception
+            or progress_dim
+            or camera_fusion
+            != "main_policy_with_gated_wrist_action_residual"
+            or policy_config.get("shared_camera_backbone") is not True
+        ):
+            raise ValueError(
+                "V10 requires a shared two-camera backbone, proprioception, and "
+                "main-policy/gated-wrist-residual fusion"
+            )
+        model = MainWristResidualPolicy(
+            feature_dim=feature_dim,
+            action_dim=int(policy_config["action_dim"]),
+            hidden_dims=tuple(policy_config["hidden_dimensions"]),
+            projection_dim=camera_projection_dim,
+            gate_hidden_dim=camera_gate_hidden_dim,
+            proprio_dim=proprio_dim,
+            wrist_dropout=float(policy_config["wrist_dropout"]),
+            wrist_residual_scale=float(policy_config["wrist_residual_scale"]),
+            gate_initial_bias=float(policy_config["gate_initial_bias"]),
+            output_layer_scale=float(policy_config.get("output_layer_scale", 0.01)),
+        )
+    elif architecture in r3m_architectures:
         expected_proprioception = r3m_architectures[architecture]
         if (
             camera_names != ("cam_main", "cam_wrist")
@@ -417,7 +452,9 @@ def predict_action(
                 "gmm_inference_override must be None or "
                 "'highest-probability-mode'"
             )
-        if isinstance(bundle.model, R3MRobomimicPolicy):
+        if isinstance(
+            bundle.model, (R3MRobomimicPolicy, MainWristResidualPolicy)
+        ):
             if cam_wrist_features is None:
                 raise RuntimeError("R3M multi-view policy requires cam_wrist")
             normalized_action = bundle.model(
