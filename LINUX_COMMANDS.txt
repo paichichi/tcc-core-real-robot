@@ -28,6 +28,7 @@ python scripts/run_policy.py \
   --offline \
   --device auto \
   --execute-policy \
+  --supervised-bounded-test \
   --emergency-stop-ready \
   --run-until-stopped \
   --watchdog-seconds 300

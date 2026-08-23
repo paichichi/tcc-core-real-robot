@@ -315,8 +315,10 @@ strawberry
 
 ## 安全状态
 
-`--execute-home` 只执行回 home；`--execute-policy` 才会启用经过裁剪的真实 rollout，
-且必须同时给出 `--emergency-stop-ready`。不要使用保留参数 `--execute`。程序退出时
+`--execute-home` 只执行回 home；`--execute-policy` 才会启用经过裁剪的真实 rollout。
+在当前 action contract 已由 359 帧 demo replay 验证、但 workspace 仍处于校准状态时，
+真实 rollout 必须同时给出 `--supervised-bounded-test` 和
+`--emergency-stop-ready`。不要使用保留参数 `--execute`。程序退出时
 会调用官方 driver cleanup 并恢复 Idle。新版 policy 不绕过任何现有动作边界。
 
 持续人工监督模式使用 `--run-until-stopped`，且不能同时指定 `--max-steps`。该模式
