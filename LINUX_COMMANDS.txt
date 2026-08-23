@@ -4,4 +4,4 @@ source .venv/bin/activate
 
 hf download Chipaipai/tcc-core-real-robot-policies policies_v10_shared_rn50_main_wrist_residual/ours_rn50/checkpoint_015000.pt --revision f17093b59bfcbde9ecb6fc41812767e203adabad --local-dir models/v10_15k
 
-python scripts/eval_demo_first_frames.py --config configs/experiment_v10_shared_rn50_main_wrist_residual_100.yaml --robot-config configs/robot.yaml --dataset-root datasets/pick_and_place_4_object_diverse --backbone ours_rn50 --demonstrations 100 --policy-checkpoint models/v10_15k/policies_v10_shared_rn50_main_wrist_residual/ours_rn50/checkpoint_015000.pt --task carrot --episodes 10 --split test --tcc-source-root /home/robotarm/TCC-core --online --device auto
+python scripts/eval_demo_first_frames.py --config configs/experiment_v10_shared_rn50_main_wrist_residual_100.yaml --robot-config configs/robot.yaml --dataset-root datasets/pick_and_place_4_object_diverse --backbone ours_rn50 --demonstrations 100 --policy-checkpoint models/v10_15k/policies_v10_shared_rn50_main_wrist_residual/ours_rn50/checkpoint_015000.pt --task carrot --episodes 10 --split test --tcc-source-root /home/robotarm/TCC-core --device auto
