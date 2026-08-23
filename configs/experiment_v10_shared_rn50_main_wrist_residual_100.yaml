@@ -38,9 +38,9 @@ backbone:
 
 model_hub:
   repository: Chipaipai/tcc-core-real-robot-policies
-  revision: 59eaf7c32669910b2837a0821cf51b5ed2286401
+  revision: 22ecc2d9269f935b28d4b4a2b718466a9c748089
   backbone_manifest: backbones/manifest.json
-  policy_checkpoint_template: policies_v10_shared_rn50_main_wrist_residual/{backbone}/checkpoint_050000.pt
+  policy_checkpoint_template: policies_v10_shared_rn50_main_wrist_residual/{backbone}/checkpoint_005000.pt
   policy_metrics_template: policies_v10_shared_rn50_main_wrist_residual/{backbone}/metrics.json
   supported_backbones: [ours_rn50]
   supported_demonstrations: [100]
