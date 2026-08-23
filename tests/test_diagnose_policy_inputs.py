@@ -34,6 +34,19 @@ def test_jpeg_round_trip_preserves_rgb_contract() -> None:
     assert float(np.abs(result.astype(float) - image).mean()) < 12.0
 
 
+def test_yuv420p_round_trip_preserves_rgb_contract() -> None:
+    module = load_diagnostic()
+    image = np.zeros((16, 24, 3), dtype=np.uint8)
+    image[:, :12, 0] = 255
+    image[:, 12:, 1] = 128
+
+    result = module.yuv420p_round_trip(image)
+
+    assert result.shape == image.shape
+    assert result.dtype == np.uint8
+    assert float(np.abs(result.astype(float) - image).mean()) < 3.0
+
+
 def test_channel_statistics_and_arm_difference() -> None:
     module = load_diagnostic()
     image = np.full((4, 5, 3), [10, 20, 30], dtype=np.uint8)

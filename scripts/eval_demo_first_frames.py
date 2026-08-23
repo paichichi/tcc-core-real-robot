@@ -133,12 +133,11 @@ def main() -> None:
     selected = [
         record
         for record in records
-        if record.task_index == task_index and record.split == "train"
+        if record.task_index == task_index
     ][: args.episodes]
     if len(selected) != args.episodes:
         raise RuntimeError(
-            f"Only {len(selected)} training episodes available; "
-            f"requested {args.episodes}"
+            f"Only {len(selected)} episodes available; requested {args.episodes}"
         )
 
     from tcc_real_robot.policy_runtime import (
@@ -238,6 +237,7 @@ def main() -> None:
         rows.append(
             {
                 "episode": record.episode_index,
+                "split": record.split,
                 "state": state,
                 "target": target,
                 "prediction": prediction,
@@ -303,7 +303,15 @@ def main() -> None:
         report.write(f"Task: {task_name} (index {task_index})\n")
         report.write(f"Backbone: {args.backbone}\n")
         report.write(f"Demonstrations: {args.demonstrations}\n")
-        report.write(f"Training episodes checked: {len(rows)}\n")
+        report.write(f"Episodes checked: {len(rows)}\n")
+        report.write(
+            "Split counts: "
+            + ", ".join(
+                f"{split_name}={sum(row['split'] == split_name for row in rows)}"
+                for split_name in ("train", "validation", "test")
+            )
+            + "\n"
+        )
         report.write(f"Hub revision: {assets.revision}\n")
         report.write(f"Policy SHA256: {assets.policy_sha256}\n")
         report.write(
@@ -325,7 +333,7 @@ def main() -> None:
         report.write(f"Device: {device}\n\n")
         for row in rows:
             comparison = row["comparison"]
-            report.write(f"Episode {row['episode']:06d}\n")
+            report.write(f"Episode {row['episode']:06d} ({row['split']})\n")
             for name in ("state", "target", "prediction"):
                 values = ", ".join(f"{value:.7f}" for value in row[name])
                 report.write(f"  {name}: [{values}]\n")
@@ -348,6 +356,14 @@ def main() -> None:
         arm_deltas = [row["comparison"].prediction_max_arm_delta_rad for row in rows]
         gripper_deltas = [row["comparison"].prediction_gripper_delta_m for row in rows]
         action_maes = [row["comparison"].prediction_action_mae for row in rows]
+        absolute_errors = np.stack(
+            [np.abs(row["prediction"] - row["target"]) for row in rows]
+        )
+        ranked = sorted(
+            rows,
+            key=lambda row: row["comparison"].prediction_action_mae,
+            reverse=True,
+        )
         report.write("Summary\n")
         report.write(
             f"Prediction arm delta median/max: {np.median(arm_deltas):.7f} / "
@@ -360,6 +376,29 @@ def main() -> None:
         report.write(
             f"Prediction action MAE median/max: {np.median(action_maes):.7f} / "
             f"{max(action_maes):.7f}\n"
+        )
+        report.write(
+            "Prediction action MAE p90/p95/p99: "
+            f"{np.percentile(action_maes, 90):.7f} / "
+            f"{np.percentile(action_maes, 95):.7f} / "
+            f"{np.percentile(action_maes, 99):.7f}\n"
+        )
+        report.write(
+            "Per-dimension absolute error mean: "
+            f"{absolute_errors.mean(axis=0).tolist()}\n"
+        )
+        report.write(
+            "Per-dimension absolute error p95: "
+            f"{np.percentile(absolute_errors, 95, axis=0).tolist()}\n"
+        )
+        report.write(
+            "Worst five episodes by action MAE: "
+            + ", ".join(
+                f"{row['episode']:06d}({row['split']})="
+                f"{row['comparison'].prediction_action_mae:.7f}"
+                for row in ranked[:5]
+            )
+            + "\n"
         )
         report.write(
             "Recorded/predicted arm first-step envelope: "

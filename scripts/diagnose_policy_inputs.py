@@ -172,6 +172,16 @@ def jpeg_round_trip(frame: np.ndarray, quality: int = 95) -> np.ndarray:
         return np.asarray(decoded.convert("RGB"), dtype=np.uint8).copy()
 
 
+def yuv420p_round_trip(frame: np.ndarray) -> np.ndarray:
+    """Approximate the dataset video's RGB -> yuv420p -> RGB color path."""
+    if frame.ndim != 3 or frame.shape[2] != 3 or frame.dtype != np.uint8:
+        raise ValueError("YUV input must be an RGB uint8 image")
+    if frame.shape[0] % 2 or frame.shape[1] % 2:
+        raise ValueError("YUV420P input dimensions must be even")
+    yuv = cv2.cvtColor(frame, cv2.COLOR_RGB2YUV_I420)
+    return cv2.cvtColor(yuv, cv2.COLOR_YUV2RGB_I420)
+
+
 def channel_statistics(frame: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     values = frame.astype(np.float64)
     return values.mean(axis=(0, 1)), values.std(axis=(0, 1))
@@ -316,9 +326,16 @@ def main() -> None:
         )
     try:
         with camera_context as cameras:
+            camera_properties_before_warmup = (
+                dict(cameras.main_properties),
+                dict(cameras.wrist_properties),
+            )
+            startup_main, startup_wrist = cameras.read_rgb_pair()
             for _ in range(args.warmup_frames):
                 cameras.read_rgb_pair()
             live_main, live_wrist = cameras.read_rgb_pair()
+            if hasattr(cameras, "refresh_properties"):
+                cameras.refresh_properties()
             camera_properties = (cameras.main_properties, cameras.wrist_properties)
             pair_skew_ms = cameras.last_pair_skew_ms
             if home_session is not None:
@@ -381,12 +398,61 @@ def main() -> None:
     )
     jpeg_live_main = jpeg_round_trip(live_main)
     jpeg_live_wrist = jpeg_round_trip(live_wrist)
+    yuv_live_main = yuv420p_round_trip(live_main)
+    yuv_live_wrist = yuv420p_round_trip(live_wrist)
+    dataset_style_live_main = jpeg_round_trip(yuv_live_main)
+    dataset_style_live_wrist = jpeg_round_trip(yuv_live_wrist)
     jpeg_live_prediction = (
         predict_action(
             backbone,
             bundle,
             jpeg_live_main,
             jpeg_live_wrist,
+            task_index,
+            image_size,
+            device,
+            observation_state=home,
+            episode_progress=0.0,
+        )
+        .numpy()
+        .astype(np.float64)
+    )
+    yuv_live_prediction = (
+        predict_action(
+            backbone,
+            bundle,
+            yuv_live_main,
+            yuv_live_wrist,
+            task_index,
+            image_size,
+            device,
+            observation_state=home,
+            episode_progress=0.0,
+        )
+        .numpy()
+        .astype(np.float64)
+    )
+    dataset_style_live_prediction = (
+        predict_action(
+            backbone,
+            bundle,
+            dataset_style_live_main,
+            dataset_style_live_wrist,
+            task_index,
+            image_size,
+            device,
+            observation_state=home,
+            episode_progress=0.0,
+        )
+        .numpy()
+        .astype(np.float64)
+    )
+    startup_prediction = (
+        predict_action(
+            backbone,
+            bundle,
+            startup_main,
+            startup_wrist,
             task_index,
             image_size,
             device,
@@ -599,6 +665,12 @@ def main() -> None:
     matched_wrist_path = args.output_dir / f"{stem}_matched_live_wrist.png"
     jpeg_main_path = args.output_dir / f"{stem}_jpeg95_live_main.png"
     jpeg_wrist_path = args.output_dir / f"{stem}_jpeg95_live_wrist.png"
+    yuv_main_path = args.output_dir / f"{stem}_yuv420p_live_main.png"
+    yuv_wrist_path = args.output_dir / f"{stem}_yuv420p_live_wrist.png"
+    dataset_style_main_path = args.output_dir / f"{stem}_dataset_style_live_main.png"
+    dataset_style_wrist_path = args.output_dir / f"{stem}_dataset_style_live_wrist.png"
+    startup_main_path = args.output_dir / f"{stem}_startup_main.png"
+    startup_wrist_path = args.output_dir / f"{stem}_startup_wrist.png"
     contact_path = args.output_dir / f"{stem}_comparison.jpg"
     report_path = args.output_dir / f"{stem}.txt"
     save_rgb(live_main_path, live_main)
@@ -609,6 +681,12 @@ def main() -> None:
     save_rgb(matched_wrist_path, matched_live_wrist)
     save_rgb(jpeg_main_path, jpeg_live_main)
     save_rgb(jpeg_wrist_path, jpeg_live_wrist)
+    save_rgb(yuv_main_path, yuv_live_main)
+    save_rgb(yuv_wrist_path, yuv_live_wrist)
+    save_rgb(dataset_style_main_path, dataset_style_live_main)
+    save_rgb(dataset_style_wrist_path, dataset_style_live_wrist)
+    save_rgb(startup_main_path, startup_main)
+    save_rgb(startup_wrist_path, startup_wrist)
     contact = np.vstack(
         (
             np.hstack(
@@ -666,6 +744,11 @@ def main() -> None:
     jpeg_effect = maximum_arm_action_difference(
         live_prediction, jpeg_live_prediction
     )
+    yuv_effect = maximum_arm_action_difference(live_prediction, yuv_live_prediction)
+    dataset_style_effect = maximum_arm_action_difference(
+        live_prediction, dataset_style_live_prediction
+    )
+    warmup_effect = maximum_arm_action_difference(startup_prediction, live_prediction)
     vision_effect_demo_state = maximum_arm_action_difference(
         nearest_prediction, live_image_demo_state_prediction
     )
@@ -677,6 +760,24 @@ def main() -> None:
     )
     state_effect_live_image = maximum_arm_action_difference(
         live_image_demo_state_prediction, live_prediction
+    )
+    demo_main_channel_means = np.stack(
+        [channel_statistics(row["main"])[0] for row in demo_rows]
+    )
+    demo_wrist_channel_means = np.stack(
+        [channel_statistics(row["wrist"])[0] for row in demo_rows]
+    )
+    live_main_color_z = (live_main_mean - demo_main_channel_means.mean(0)) / np.where(
+        demo_main_channel_means.std(0) > 1e-9,
+        demo_main_channel_means.std(0),
+        1.0,
+    )
+    live_wrist_color_z = (
+        live_wrist_mean - demo_wrist_channel_means.mean(0)
+    ) / np.where(
+        demo_wrist_channel_means.std(0) > 1e-9,
+        demo_wrist_channel_means.std(0),
+        1.0,
     )
     with report_path.open("w", encoding="utf-8") as report:
         report.write("Live Policy Input Diagnostic\n")
@@ -690,8 +791,14 @@ def main() -> None:
         report.write(f"Backbone: {args.backbone}\n")
         report.write(f"Policy SHA256: {assets.policy_sha256}\n")
         report.write(f"Camera backend: {args.camera_backend}\n")
-        report.write(f"Camera main: {camera_properties[0]}\n")
-        report.write(f"Camera wrist: {camera_properties[1]}\n")
+        report.write(
+            f"Camera main before warm-up: {camera_properties_before_warmup[0]}\n"
+        )
+        report.write(
+            f"Camera wrist before warm-up: {camera_properties_before_warmup[1]}\n"
+        )
+        report.write(f"Camera main after warm-up: {camera_properties[0]}\n")
+        report.write(f"Camera wrist after warm-up: {camera_properties[1]}\n")
         report.write(f"Camera pair skew: {pair_skew_ms:.3f} ms\n")
         report.write(
             f"Home {'observed' if args.execute_home else 'configured reference'}: "
@@ -739,6 +846,24 @@ def main() -> None:
         report.write(
             "Raw-live versus JPEG95-live maximum arm action difference: "
             f"{jpeg_effect:.7f} rad\n\n"
+        )
+        report.write(f"Live YUV420P prediction: {yuv_live_prediction.tolist()}\n")
+        report.write(
+            "Raw-live versus YUV420P-live maximum arm action difference: "
+            f"{yuv_effect:.7f} rad\n"
+        )
+        report.write(
+            "Live dataset-style YUV420P+JPEG95 prediction: "
+            f"{dataset_style_live_prediction.tolist()}\n"
+        )
+        report.write(
+            "Raw-live versus dataset-style maximum arm action difference: "
+            f"{dataset_style_effect:.7f} rad\n"
+        )
+        report.write(f"Camera startup prediction: {startup_prediction.tolist()}\n")
+        report.write(
+            "Camera warm-up maximum arm action difference: "
+            f"{warmup_effect:.7f} rad ({args.warmup_frames} discarded pairs)\n\n"
         )
 
         report.write("A/B/C/D image-state isolation\n")
@@ -873,6 +998,18 @@ def main() -> None:
         report.write(
             f"Demo wrist: {demo_wrist_mean.tolist()} / {demo_wrist_std.tolist()}\n\n"
         )
+        report.write(
+            "Demo main channel-mean population mean/std: "
+            f"{demo_main_channel_means.mean(0).tolist()} / "
+            f"{demo_main_channel_means.std(0).tolist()}\n"
+        )
+        report.write(
+            "Demo wrist channel-mean population mean/std: "
+            f"{demo_wrist_channel_means.mean(0).tolist()} / "
+            f"{demo_wrist_channel_means.std(0).tolist()}\n"
+        )
+        report.write(f"Live main color z-score: {live_main_color_z.tolist()}\n")
+        report.write(f"Live wrist color z-score: {live_wrist_color_z.tolist()}\n\n")
         report.write(f"Live main image: {live_main_path}\n")
         report.write(f"Live wrist image: {live_wrist_path}\n")
         report.write(f"Nearest demo main image: {demo_main_path}\n")
@@ -881,6 +1018,12 @@ def main() -> None:
         report.write(f"Color-matched live wrist image: {matched_wrist_path}\n")
         report.write(f"JPEG95 live main image: {jpeg_main_path}\n")
         report.write(f"JPEG95 live wrist image: {jpeg_wrist_path}\n")
+        report.write(f"YUV420P live main image: {yuv_main_path}\n")
+        report.write(f"YUV420P live wrist image: {yuv_wrist_path}\n")
+        report.write(f"Dataset-style live main image: {dataset_style_main_path}\n")
+        report.write(f"Dataset-style live wrist image: {dataset_style_wrist_path}\n")
+        report.write(f"Camera startup main image: {startup_main_path}\n")
+        report.write(f"Camera startup wrist image: {startup_wrist_path}\n")
         report.write(f"Comparison image: {contact_path}\n")
 
     print(f"report: {report_path}")

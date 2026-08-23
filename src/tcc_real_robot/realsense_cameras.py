@@ -45,11 +45,12 @@ class RealSenseColorCameras:
         self._executor = ThreadPoolExecutor(max_workers=2)
         self.main_pipeline: Any | None = None
         self.wrist_pipeline: Any | None = None
+        self.main_profile: Any | None = None
+        self.wrist_profile: Any | None = None
         try:
-            self.main_pipeline, main_profile = self._start(main_serial)
-            self.wrist_pipeline, wrist_profile = self._start(wrist_serial)
-            self.main_properties = self._properties(main_profile)
-            self.wrist_properties = self._properties(wrist_profile)
+            self.main_pipeline, self.main_profile = self._start(main_serial)
+            self.wrist_pipeline, self.wrist_profile = self._start(wrist_serial)
+            self.refresh_properties()
         except Exception:
             self.close()
             raise
@@ -81,7 +82,7 @@ class RealSenseColorCameras:
         stream = pipeline_profile.get_stream(
             self.rs.stream.color
         ).as_video_stream_profile()
-        return {
+        properties: dict[str, object] = {
             "serial": str(device.get_info(self.rs.camera_info.serial_number)),
             "name": str(device.get_info(self.rs.camera_info.name)),
             "stream": "color",
@@ -90,6 +91,38 @@ class RealSenseColorCameras:
             "height": int(stream.height()),
             "fps": int(stream.fps()),
         }
+        controls: dict[str, float] = {}
+        if hasattr(device, "query_sensors"):
+            option_names = (
+                "enable_auto_exposure",
+                "exposure",
+                "gain",
+                "enable_auto_white_balance",
+                "white_balance",
+                "brightness",
+                "contrast",
+                "saturation",
+                "sharpness",
+                "gamma",
+                "hue",
+                "backlight_compensation",
+                "power_line_frequency",
+            )
+            for sensor in device.query_sensors():
+                for name in option_names:
+                    option = getattr(self.rs.option, name, None)
+                    if option is None or not sensor.supports(option) or name in controls:
+                        continue
+                    controls[name] = float(sensor.get_option(option))
+        properties["color_controls"] = controls
+        return properties
+
+    def refresh_properties(self) -> None:
+        """Refresh dynamic color controls after camera warm-up."""
+        if self.main_profile is None or self.wrist_profile is None:
+            raise RuntimeError("RealSense profiles are not running")
+        self.main_properties = self._properties(self.main_profile)
+        self.wrist_properties = self._properties(self.wrist_profile)
 
     def _wait_rgb(self, pipeline: Any) -> tuple[np.ndarray, float]:
         frames = pipeline.wait_for_frames(self.timeout_ms)
@@ -194,13 +227,20 @@ class RealSenseSingleColorCamera(RealSenseColorCameras):
         self._executor = ThreadPoolExecutor(max_workers=1)
         self.main_pipeline: Any | None = None
         self.wrist_pipeline: Any | None = None
+        self.main_profile: Any | None = None
+        self.wrist_profile: Any | None = None
         try:
-            self.main_pipeline, main_profile = self._start(main_serial)
-            self.main_properties = self._properties(main_profile)
+            self.main_pipeline, self.main_profile = self._start(main_serial)
+            self.main_properties = self._properties(self.main_profile)
             self.wrist_properties = {"enabled": False, "reason": "policy_is_single_view"}
         except Exception:
             self.close()
             raise
+
+    def refresh_properties(self) -> None:
+        if self.main_profile is None:
+            raise RuntimeError("RealSense profile is not running")
+        self.main_properties = self._properties(self.main_profile)
 
     def read_rgb_pair(self) -> tuple[np.ndarray, np.ndarray]:
         if self.main_pipeline is None:
