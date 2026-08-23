@@ -26,7 +26,8 @@ flip、rotation 或 random crop，避免改变图像坐标却保留原 absolute-
 （m）。只使用 train episode 的逐维 action mean/std 做 normalization；runtime
 denormalize 后直接交给现有 Trossen joint-position 安全层和
 `set_all_positions(target, goal_time, False)`。V10 不使用 delta adapter、Cartesian
-velocity 或 IK。
+velocity 或 IK。缓存、checkpoint 和 runtime 都强制声明 action 相对 measured state
+领先两帧；20 Hz 下两帧严格对应 driver 的 `0.1 s` 非阻塞插值。
 
 100 个 demo 按完整 episode 固定划分为 90/10 train/test，避免帧泄漏。V10 不使用
 validation 或 early stopping：训练固定为 50K steps，部署固定使用最后的
@@ -34,10 +35,11 @@ validation 或 early stopping：训练固定为 50K steps，部署固定使用�
 checkpoint。batch size 为 32；policy head、projection/gate、backbone 的 learning
 rate 分别为 `1e-3`、`1e-4`、`1e-5`。损失由 fused action MSE、main-only
 auxiliary MSE 和 wrist residual regularization 组成。每 5K 步保存恢复用 checkpoint，
-但不在它们之间选择“最佳”模型。
+但不在它们之间选择“最佳”模型。每个 5K 窗口同时保存平均 loss、逐维 action
+MAE、gate、residual 和 gradient norm；这些指标只用于判断收敛，不参与模型选择。
 
-完整训练和本地 checkpoint 离线闸门命令放在 `LINUX_COMMANDS.txt`。首帧诊断会
-比较预测绝对目标与 demo 记录目标；超过记录首步 envelope 的模型会得到
+完整训练和本地 checkpoint 离线闸门命令放在 `LINUX_COMMANDS.txt`。首帧诊断默认
+只检查 10 个 held-out test episode，比较预测绝对目标与 demo 记录目标；超过记录首步 envelope 的模型会得到
 `Decision: BLOCKED`，不应进入实机 rollout。
 
 ## 历史实验：V9 independent encoders 与 V6 gated features
@@ -220,7 +222,7 @@ find /home/robotarm -path '*/xirl/models.py' -print
 
 ## 6. 先运行 demo 首帧离线诊断
 
-这个命令不连接机械臂。它读取 10 个实际训练 episode 的两路首帧，比较 policy
+这个命令不连接机械臂。它读取 10 个 held-out test episode 的两路首帧，比较 policy
 预测、记录 action 和首帧 state：
 
 ```bash
@@ -229,6 +231,7 @@ python scripts/eval_demo_first_frames.py \
   --demonstrations 80 \
   --task carrot \
   --episodes 10 \
+  --split test \
   --tcc-source-root /home/robotarm/TCC-core \
   --offline \
   --device auto

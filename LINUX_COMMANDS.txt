@@ -5,3 +5,5 @@ source .venv/bin/activate
 python scripts/cache_v9_trossen_images.py --config configs/experiment_v10_shared_rn50_main_wrist_residual_100.yaml --dataset-root datasets/pick_and_place_4_object_diverse --output runs/v10_trossen_dual_camera.sqlite3
 
 python scripts/train_v10_shared_main_wrist_residual.py --config configs/experiment_v10_shared_rn50_main_wrist_residual_100.yaml --image-buffer runs/v10_trossen_dual_camera.sqlite3 --backbone ours_rn50 --tcc-source-root /home/robotarm/TCC-core --output-dir runs/v10_shared_rn50_main_wrist_residual/ours_rn50 --device auto
+
+python scripts/eval_demo_first_frames.py --config configs/experiment_v10_shared_rn50_main_wrist_residual_100.yaml --dataset-root datasets/pick_and_place_4_object_diverse --backbone ours_rn50 --demonstrations 100 --policy-checkpoint runs/v10_shared_rn50_main_wrist_residual/ours_rn50/checkpoint_050000.pt --tcc-source-root /home/robotarm/TCC-core --episodes 10 --split test --device auto

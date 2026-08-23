@@ -9,6 +9,7 @@ dataset:
   state_semantics: measured_joint_position_6_plus_gripper
   action_semantics: commanded_joint_position_6_plus_gripper
   action_source: original_lerobot_action_column
+  action_leads_measured_state_frames: 2
   tasks:
     - pick_and_place_carrot_100
 
@@ -54,6 +55,7 @@ policy:
   proprioception_dropout: 0.1
   normalize_state: true
   action_source: original_lerobot_action
+  action_leads_measured_state_frames: 2
   action_adapter: trossen_joint_position_passthrough
   gripper_action: position
   action_distribution: deterministic

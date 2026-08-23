@@ -19,7 +19,7 @@ from tcc_real_robot.model_assets import (
     sha256_file,
 )
 from tcc_real_robot.offline_eval import compare_first_frame
-from tcc_real_robot.policy_data import build_episode_records
+from tcc_real_robot.policy_data import EpisodeRecord, build_episode_records
 
 
 def parse_args() -> argparse.Namespace:
@@ -41,6 +41,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--task", default="carrot")
     parser.add_argument("--episodes", type=int, default=10)
+    parser.add_argument(
+        "--split",
+        choices=("train", "test", "all"),
+        default="test",
+        help="Episode split used by the first-frame deployment gate.",
+    )
     parser.add_argument(
         "--recorded-envelope-multiplier",
         type=float,
@@ -95,6 +101,29 @@ def resolve_dataset_root(config: dict, override: Path | None) -> Path:
     return root
 
 
+def select_records(
+    records: list[EpisodeRecord],
+    *,
+    task_index: int,
+    split: str,
+    episodes: int,
+) -> list[EpisodeRecord]:
+    """Select an explicit split without silently falling back to train data."""
+    if split not in {"train", "test", "all"}:
+        raise ValueError(f"Unsupported first-frame split: {split}")
+    selected = [
+        record
+        for record in records
+        if record.task_index == task_index
+        and (split == "all" or record.split == split)
+    ][:episodes]
+    if len(selected) != episodes:
+        raise RuntimeError(
+            f"Only {len(selected)} {split} episodes available; requested {episodes}"
+        )
+    return selected
+
+
 def main() -> None:
     args = parse_args()
     if args.episodes <= 0:
@@ -130,15 +159,12 @@ def main() -> None:
         split_sizes,
         shuffle=shuffle_episodes,
     )
-    selected = [
-        record
-        for record in records
-        if record.task_index == task_index
-    ][: args.episodes]
-    if len(selected) != args.episodes:
-        raise RuntimeError(
-            f"Only {len(selected)} episodes available; requested {args.episodes}"
-        )
+    selected = select_records(
+        records,
+        task_index=task_index,
+        split=args.split,
+        episodes=args.episodes,
+    )
 
     from tcc_real_robot.policy_runtime import (
         load_policy_bundle,
@@ -303,6 +329,7 @@ def main() -> None:
         report.write(f"Task: {task_name} (index {task_index})\n")
         report.write(f"Backbone: {args.backbone}\n")
         report.write(f"Demonstrations: {args.demonstrations}\n")
+        report.write(f"Requested split: {args.split}\n")
         report.write(f"Episodes checked: {len(rows)}\n")
         report.write(
             "Split counts: "

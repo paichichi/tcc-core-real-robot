@@ -180,6 +180,9 @@ def main() -> None:
         tasks=[str(task) for task in config["dataset"]["tasks"]],
         episodes_per_task=int(config["dataset"]["demonstrations_per_task"]),
         frames_per_episode=int(config["evaluation"]["max_rollout_steps"]),
+        action_leads_measured_state_frames=int(
+            config["dataset"]["action_leads_measured_state_frames"]
+        ),
     )
     seed = int(config["seed"])
     random.seed(seed)

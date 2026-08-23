@@ -392,6 +392,8 @@ def test_v10_uses_shared_rn50_and_main_dominant_wrist_residual() -> None:
     )
     assert policy["proprioception"] is True
     assert policy["action_representation"] == "absolute"
+    assert config["dataset"]["action_leads_measured_state_frames"] == 2
+    assert policy["action_leads_measured_state_frames"] == 2
     assert policy["action_chunk_size"] == 1
     assert policy["wrist_dropout"] == 0.2
     assert policy["wrist_residual_scale"] == 0.25
@@ -399,6 +401,8 @@ def test_v10_uses_shared_rn50_and_main_dominant_wrist_residual() -> None:
     assert policy["main_loss_weight"] == 0.5
     assert policy["residual_regularization_weight"] == 0.01
     assert policy["checkpoint_every"] == 5000
+    assert policy["num_workers"] == 20
+    assert policy["prefetch_factor"] == 4
     assert "eval_every" not in policy
     assert config["split"] == {
         "protocol": "trossen_train_test_episode_holdout",

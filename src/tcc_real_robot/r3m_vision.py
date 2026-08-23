@@ -51,6 +51,14 @@ def build_r3m_train_transform(
         raise ValueError("Blur probability must be in [0, 1]")
     return transforms.Compose(
         [
+            # Resize while the image is still uint8. Applying ColorJitter and
+            # GaussianBlur to the 640x480 source made the DataLoader the dominant
+            # training bottleneck without adding supervision signal.
+            transforms.Resize(
+                (image_size, image_size),
+                interpolation=InterpolationMode.BILINEAR,
+                antialias=False,
+            ),
             transforms.ConvertImageDtype(torch.float32),
             transforms.ColorJitter(
                 brightness=brightness,
@@ -66,11 +74,6 @@ def build_r3m_train_transform(
                     )
                 ],
                 p=blur_probability,
-            ),
-            transforms.Resize(
-                (image_size, image_size),
-                interpolation=InterpolationMode.BILINEAR,
-                antialias=False,
             ),
             transforms.Normalize(
                 mean=(0.485, 0.456, 0.406),

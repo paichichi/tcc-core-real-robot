@@ -85,6 +85,7 @@ def validate_config(config: dict, backbone_name: str) -> None:
         "proprioception": True,
         "proprioception_dim": 7,
         "normalize_state": True,
+        "action_leads_measured_state_frames": 2,
     }
     mismatches = {
         key: (policy.get(key), value)
@@ -93,6 +94,12 @@ def validate_config(config: dict, backbone_name: str) -> None:
     }
     if mismatches:
         raise ValueError(f"Invalid V10 contract: {mismatches}")
+    dataset_lead = config["dataset"].get("action_leads_measured_state_frames")
+    if dataset_lead != policy["action_leads_measured_state_frames"]:
+        raise ValueError(
+            "Dataset/policy action lead mismatch: "
+            f"{dataset_lead} != {policy['action_leads_measured_state_frames']}"
+        )
     if backbone_name != "ours_rn50":
         raise ValueError("V10 intentionally supports only ours_rn50")
     if config["backbone"].get("fine_tuning") != (
@@ -104,6 +111,10 @@ def validate_config(config: dict, backbone_name: str) -> None:
         raise ValueError("V10 augmentation must be train-only and per-camera")
     if augmentation.get("spatial_transforms") is not False:
         raise ValueError("V10 forbids spatial transforms for absolute-action labels")
+    if int(policy.get("num_workers", 0)) <= 0:
+        raise ValueError("V10 requires positive DataLoader workers")
+    if int(policy.get("prefetch_factor", 0)) <= 0:
+        raise ValueError("V10 requires a positive DataLoader prefetch factor")
 
 
 def policy_loss(
@@ -202,7 +213,7 @@ def save_checkpoint(
     config: dict,
     metadata: dict,
     step: int,
-    evaluation_metrics: dict[str, object] | None = None,
+    training_metrics: dict[str, object] | None = None,
 ) -> None:
     payload = {
         "backbone_model": cpu_state(backbone),
@@ -218,8 +229,8 @@ def save_checkpoint(
         "loss": config["policy"]["loss"],
         "actuation_enabled": False,
     }
-    if evaluation_metrics is not None:
-        payload["evaluation_metrics"] = evaluation_metrics
+    if training_metrics is not None:
+        payload["training_metrics"] = training_metrics
     torch.save(payload, path)
 
 
@@ -234,6 +245,9 @@ def main() -> None:
         tasks=[str(task) for task in config["dataset"]["tasks"]],
         episodes_per_task=int(config["dataset"]["demonstrations_per_task"]),
         frames_per_episode=int(config["evaluation"]["max_rollout_steps"]),
+        action_leads_measured_state_frames=int(
+            config["dataset"]["action_leads_measured_state_frames"]
+        ),
     )
     seed = int(config["seed"])
     random.seed(seed)
@@ -329,6 +343,11 @@ def main() -> None:
         num_workers=workers,
         pin_memory=device.type == "cuda",
         persistent_workers=workers > 0,
+        prefetch_factor=(
+            int(policy["prefetch_factor"])
+            if workers > 0
+            else None
+        ),
         drop_last=True,
     )
     test_loader = DataLoader(
@@ -370,6 +389,24 @@ def main() -> None:
     residual_weight = float(policy["residual_regularization_weight"])
     checkpoint_every = int(policy["checkpoint_every"])
     history: list[dict[str, object]] = []
+    window_metric_names = (
+        "loss",
+        "fused_mse",
+        "main_mse",
+        "residual_penalty",
+        "gate",
+        "correction_abs",
+        "gradient_norm",
+    )
+    window_totals = torch.zeros(
+        len(window_metric_names), dtype=torch.float64, device=device
+    )
+    window_gradient_norm_max = torch.zeros((), device=device)
+    window_action_absolute_error = torch.zeros(
+        model.action_dim, dtype=torch.float64, device=device
+    )
+    window_examples = 0
+    window_steps = 0
     iterator = iter(train_loader)
     for step in range(1, iterations + 1):
         train_with_frozen_batch_norm_statistics(backbone)
@@ -397,18 +434,64 @@ def main() -> None:
             float(policy["gradient_clip_norm"]),
         )
         optimizer.step()
-        row = {
-            "step": step,
-            "train_loss": float(loss.detach()),
-            "train_fused_mse": float(train_metrics["fused_mse"]),
-            "train_main_mse": float(train_metrics["main_mse"]),
-            "train_gate_mean": float(train_metrics["gate_mean"]),
-            "gradient_norm": float(gradient_norm),
-        }
+        batch = actions.shape[0]
+        denormalized_prediction = normalizer.denormalize(
+            train_metrics["prediction"].detach()
+        )
+        window_action_absolute_error.add_(
+            torch.abs(denormalized_prediction - actions).sum(0).double()
+        )
+        window_examples += batch
+        window_steps += 1
+        window_totals.add_(
+            torch.stack(
+                (
+                    loss.detach(),
+                    train_metrics["fused_mse"].detach(),
+                    train_metrics["main_mse"].detach(),
+                    train_metrics["residual_penalty"].detach(),
+                    train_metrics["gate_mean"].detach(),
+                    train_metrics["correction_abs_mean"].detach(),
+                    gradient_norm.detach(),
+                )
+            ).double()
+        )
+        window_gradient_norm_max.copy_(
+            torch.maximum(window_gradient_norm_max, gradient_norm.detach())
+        )
         if step == 1 or step % 100 == 0:
+            row = {
+                "step": step,
+                "train_loss": float(loss.detach()),
+                "train_fused_mse": float(train_metrics["fused_mse"].detach()),
+                "train_main_mse": float(train_metrics["main_mse"].detach()),
+                "train_gate_mean": float(train_metrics["gate_mean"].detach()),
+                "gradient_norm": float(gradient_norm.detach()),
+            }
             print(json.dumps(row))
         if step % checkpoint_every == 0 or step == iterations:
-            history.append(row)
+            action_mae_per_dimension = (
+                window_action_absolute_error / window_examples
+            ).cpu().tolist()
+            window_means = (window_totals / window_steps).cpu().tolist()
+            convergence_row: dict[str, object] = {
+                "step": step,
+                "window_steps": window_steps,
+                **{
+                    f"train_{key}_mean": value
+                    for key, value in zip(
+                        window_metric_names, window_means, strict=True
+                    )
+                },
+                "train_gradient_norm_max": float(window_gradient_norm_max),
+                "train_action_mae": float(
+                    sum(action_mae_per_dimension) / model.action_dim
+                ),
+                "train_action_mae_per_dimension": action_mae_per_dimension,
+                "train_loss_last": float(loss.detach()),
+            }
+            history.append(convergence_row)
+            print(json.dumps({"convergence": convergence_row}, sort_keys=True))
             save_checkpoint(
                 output_dir / f"checkpoint_{step:06d}.pt",
                 backbone=backbone,
@@ -418,7 +501,13 @@ def main() -> None:
                 config=config,
                 metadata=metadata,
                 step=step,
+                training_metrics=convergence_row,
             )
+            window_totals.zero_()
+            window_gradient_norm_max.zero_()
+            window_action_absolute_error.zero_()
+            window_examples = 0
+            window_steps = 0
 
     shutil.copyfile(
         output_dir / f"checkpoint_{iterations:06d}.pt",
@@ -442,6 +531,9 @@ def main() -> None:
         "training_iterations": iterations,
         "selected_checkpoint": f"checkpoint_{iterations:06d}.pt",
         "checkpoint_selection": "fixed_final_iteration_without_test_selection",
+        "convergence_monitoring": (
+            "checkpoint_interval_training_window_without_model_selection"
+        ),
         "test_evaluations": 1,
         "action_representation": "absolute",
         "camera_backbones": "shared",

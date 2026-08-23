@@ -73,6 +73,7 @@ def test_joint_position_driver_contract_matches_collection_api() -> None:
             "action_space": "joint_position",
             "action_representation": "absolute",
             "action_adapter": "trossen_joint_position_passthrough",
+            "action_leads_measured_state_frames": 2,
         },
     }
     robot = {
@@ -81,8 +82,14 @@ def test_joint_position_driver_contract_matches_collection_api() -> None:
             "action_space": "joint_position",
             "driver_call": "set_all_positions",
             "ik_required": False,
+            "command_goal_time_s": 0.1,
         },
-        "policy_evaluation": {"clipped_rollout": {"control_fps": 20}},
+        "policy_evaluation": {
+            "clipped_rollout": {
+                "control_fps": 20,
+                "min_time_to_move_multiplier": 2,
+            }
+        },
     }
 
     module.validate_joint_position_driver_contract(experiment, robot)
@@ -99,6 +106,7 @@ def test_joint_delta_policy_reconstructs_for_position_driver() -> None:
             "action_space": "joint_position",
             "action_representation": "current_delta",
             "action_adapter": "current_state_plus_joint_delta_to_position",
+            "action_leads_measured_state_frames": 2,
         },
     }
     robot = {
@@ -107,13 +115,50 @@ def test_joint_delta_policy_reconstructs_for_position_driver() -> None:
             "action_space": "joint_position",
             "driver_call": "set_all_positions",
             "ik_required": False,
+            "command_goal_time_s": 0.1,
         },
-        "policy_evaluation": {"clipped_rollout": {"control_fps": 20}},
+        "policy_evaluation": {
+            "clipped_rollout": {
+                "control_fps": 20,
+                "min_time_to_move_multiplier": 2,
+            }
+        },
     }
 
     module.validate_joint_position_driver_contract(experiment, robot)
     experiment["policy"]["action_adapter"] = "trossen_joint_position_passthrough"
     with pytest.raises(RuntimeError, match="Driver contract mismatch"):
+        module.validate_joint_position_driver_contract(experiment, robot)
+
+
+def test_joint_position_driver_contract_rejects_action_lead_mismatch() -> None:
+    module = load_run_policy()
+    experiment = {
+        "observations": {"fps": 20},
+        "policy": {
+            "action_space": "joint_position",
+            "action_representation": "absolute",
+            "action_adapter": "trossen_joint_position_passthrough",
+            "action_leads_measured_state_frames": 1,
+        },
+    }
+    robot = {
+        "driver_contract": {
+            "action_representation": "absolute",
+            "action_space": "joint_position",
+            "driver_call": "set_all_positions",
+            "ik_required": False,
+            "command_goal_time_s": 0.1,
+        },
+        "policy_evaluation": {
+            "clipped_rollout": {
+                "control_fps": 20,
+                "min_time_to_move_multiplier": 2,
+            }
+        },
+    }
+
+    with pytest.raises(RuntimeError, match="action_lead_frames"):
         module.validate_joint_position_driver_contract(experiment, robot)
 
 

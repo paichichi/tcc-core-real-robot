@@ -7,12 +7,14 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from tcc_real_robot.policy import (
+    ActionNormalizer,
     MainWristResidualPolicy,
     R3MRobomimicPolicy,
     TCCMLPGaussianMixturePolicy,
     TCCMLPPolicy,
 )
 from tcc_real_robot.policy_runtime import (
+    PolicyBundle,
     load_policy_bundle,
     predict_action,
     preprocess_rgb_frames,
@@ -588,6 +590,34 @@ def test_v10_shared_backbone_checkpoint_predicts_absolute_joint_goal(
 
     assert isinstance(bundle.model, MainWristResidualPolicy)
     assert torch.allclose(action, torch.full((7,), 0.25))
+
+
+def test_policy_contract_rejects_dataset_policy_action_lead_disagreement() -> None:
+    payload = v10_checkpoint_payload()
+    payload["config"]["dataset"]["action_leads_measured_state_frames"] = 2
+    payload["config"]["policy"]["action_leads_measured_state_frames"] = 2
+    model = MainWristResidualPolicy(
+        feature_dim=3,
+        projection_dim=4,
+        gate_hidden_dim=5,
+        wrist_dropout=0.2,
+        wrist_residual_scale=0.25,
+        gate_initial_bias=-2.0,
+    )
+    bundle = PolicyBundle(
+        model=model,
+        normalizer=ActionNormalizer(torch.zeros(7), torch.ones(7)),
+        state_normalizer=ActionNormalizer(torch.zeros(7), torch.ones(7)),
+        config=payload["config"],
+        step=50_000,
+    )
+    runtime_config = {
+        "dataset": {"action_leads_measured_state_frames": 1},
+        "policy": dict(payload["config"]["policy"]),
+    }
+
+    with pytest.raises(RuntimeError, match="dataset.action_leads"):
+        validate_policy_contract(runtime_config, bundle)
 
 
 def test_progress_policy_predicts_with_normalized_episode_time(

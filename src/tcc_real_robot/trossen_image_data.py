@@ -24,6 +24,7 @@ def require_complete_trossen_buffer(
     tasks: Sequence[str],
     episodes_per_task: int,
     frames_per_episode: int,
+    action_leads_measured_state_frames: int,
 ) -> dict[str, object]:
     """Fail closed unless the dual-camera buffer is complete and joint-native."""
     path = Path(database).expanduser().resolve()
@@ -44,6 +45,10 @@ def require_complete_trossen_buffer(
             "action_semantics": JOINT_ACTION_SEMANTICS,
             "action_source": "original_lerobot_action_column",
             "driver_command": "set_all_positions",
+            "action_leads_measured_state_frames": (
+                action_leads_measured_state_frames
+            ),
+            "jpeg_quality": 95,
             "episodes": expected_episodes,
             "episodes_per_task": episodes_per_task,
             "frames_per_episode": frames_per_episode,
@@ -69,6 +74,18 @@ def require_complete_trossen_buffer(
         ).fetchone()[0]
         if int(malformed):
             raise ValueError(f"Image buffer has {malformed} malformed rows")
+        non_finite_vectors = 0
+        for state_bytes, action_bytes in connection.execute(
+            "SELECT state, action FROM samples"
+        ):
+            state = np.frombuffer(state_bytes, dtype=np.float32)
+            action = np.frombuffer(action_bytes, dtype=np.float32)
+            if not np.isfinite(state).all() or not np.isfinite(action).all():
+                non_finite_vectors += 1
+        if non_finite_vectors:
+            raise ValueError(
+                f"Image buffer has {non_finite_vectors} non-finite state/action rows"
+            )
         episodes = connection.execute(
             "SELECT task_index, episode_index, COUNT(*), "
             "COUNT(DISTINCT frame_index), MIN(frame_index), MAX(frame_index) "

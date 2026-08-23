@@ -435,6 +435,27 @@ def validate_joint_position_driver_contract(
     observation_fps = float(experiment_config["observations"]["fps"])
     if control_fps != observation_fps:
         mismatches["control_fps"] = (control_fps, observation_fps)
+    lead_frames = policy.get("action_leads_measured_state_frames")
+    if not isinstance(lead_frames, int) or isinstance(lead_frames, bool) or lead_frames <= 0:
+        mismatches["policy.action_leads_measured_state_frames"] = (
+            lead_frames,
+            "positive integer",
+        )
+    else:
+        clipped = robot_config["policy_evaluation"]["clipped_rollout"]
+        goal_time = float(clipped["min_time_to_move_multiplier"]) / control_fps
+        declared_goal_time = float(driver["command_goal_time_s"])
+        if abs(goal_time - declared_goal_time) > 1e-9:
+            mismatches["driver_goal_time_s"] = (
+                declared_goal_time,
+                goal_time,
+            )
+        derived_lead_frames = goal_time * observation_fps
+        if abs(derived_lead_frames - lead_frames) > 1e-9:
+            mismatches["action_lead_frames"] = (
+                lead_frames,
+                derived_lead_frames,
+            )
     if mismatches:
         raise RuntimeError(f"Joint-position Driver contract mismatch: {mismatches}")
 

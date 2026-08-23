@@ -26,6 +26,13 @@ def test_training_augmentation_is_seeded_and_preserves_tensor_contract() -> None
     assert not torch.equal(first, different)
 
 
+def test_training_augmentation_resizes_before_float_photometric_work() -> None:
+    transform = build_r3m_train_transform(32)
+
+    assert transform.transforms[0].__class__.__name__ == "Resize"
+    assert transform.transforms[1].__class__.__name__ == "ConvertImageDtype"
+
+
 def test_evaluation_transform_remains_deterministic() -> None:
     image = torch.randint(0, 256, (3, 48, 64), dtype=torch.uint8)
     transform = build_r3m_transform(32)

@@ -146,6 +146,9 @@ def main() -> None:
             "state_semantics": JOINT_STATE_SEMANTICS,
             "action_semantics": JOINT_ACTION_SEMANTICS,
             "action_source": "original_lerobot_action_column",
+            "action_leads_measured_state_frames": int(
+                config["dataset"]["action_leads_measured_state_frames"]
+            ),
             "driver_command": "set_all_positions",
             "jpeg_quality": 95,
             "episodes": len(records),
@@ -165,6 +168,9 @@ def main() -> None:
         tasks=[str(task) for task in config["dataset"]["tasks"]],
         episodes_per_task=int(config["dataset"]["demonstrations_per_task"]),
         frames_per_episode=int(config["evaluation"]["max_rollout_steps"]),
+        action_leads_measured_state_frames=int(
+            config["dataset"]["action_leads_measured_state_frames"]
+        ),
     )
     print(output)
 

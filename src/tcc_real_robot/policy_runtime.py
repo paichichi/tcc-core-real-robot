@@ -84,6 +84,24 @@ def validate_policy_contract(
         for field in fields
         if expected.get(field) != actual.get(field)
     }
+    lead_field = "action_leads_measured_state_frames"
+    expected_dataset_lead = runtime_config.get("dataset", {}).get(lead_field)
+    actual_dataset_lead = bundle.config.get("dataset", {}).get(lead_field)
+    if expected_dataset_lead != actual_dataset_lead:
+        mismatches[f"dataset.{lead_field}"] = (
+            expected_dataset_lead,
+            actual_dataset_lead,
+        )
+    if expected_dataset_lead != expected.get(lead_field):
+        mismatches[f"runtime.dataset_policy.{lead_field}"] = (
+            expected_dataset_lead,
+            expected.get(lead_field),
+        )
+    if actual_dataset_lead != actual.get(lead_field):
+        mismatches[f"checkpoint.dataset_policy.{lead_field}"] = (
+            actual_dataset_lead,
+            actual.get(lead_field),
+        )
     if mismatches:
         raise RuntimeError(
             "Runtime config/checkpoint policy contract mismatch: "
