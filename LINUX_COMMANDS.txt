@@ -2,6 +2,4 @@ cd ~/tcc-core-real-robot
 
 source .venv/bin/activate
 
-hf download Chipaipai/tcc-core-real-robot-policies policies_v10_shared_rn50_main_wrist_residual/ours_rn50/checkpoint_005000.pt --revision 22ecc2d9269f935b28d4b4a2b718466a9c748089 --local-dir models/v10
-
-python scripts/run_policy.py --config configs/experiment_v10_shared_rn50_main_wrist_residual_100.yaml --robot-config configs/robot.yaml --policy-checkpoint models/v10/policies_v10_shared_rn50_main_wrist_residual/ours_rn50/checkpoint_005000.pt --backbone ours_rn50 --demonstrations 100 --task carrot --camera-backend realsense-sdk --cam-main-serial 838212073584 --cam-wrist-serial 409122274608 --tcc-source-root /home/robotarm/TCC-core --online --device auto --execute-home --max-steps 10
+python scripts/eval_demo_first_frames.py --config configs/experiment_v10_shared_rn50_main_wrist_residual_100.yaml --robot-config configs/robot.yaml --dataset-root datasets/pick_and_place_4_object_diverse --backbone ours_rn50 --demonstrations 100 --policy-checkpoint models/v10/policies_v10_shared_rn50_main_wrist_residual/ours_rn50/checkpoint_005000.pt --task carrot --episodes 10 --split test --tcc-source-root /home/robotarm/TCC-core --offline --device auto
