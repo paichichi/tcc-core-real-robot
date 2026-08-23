@@ -112,3 +112,55 @@ def test_resolve_model_assets_rejects_backbone_hash_mismatch(
             60,
             download_file=fake_download,
         )
+
+
+def test_resolve_model_assets_allows_checkpoint_without_metrics(
+    tmp_path: Path,
+) -> None:
+    backbone = b"frozen-backbone"
+    policy = b"final-policy"
+    files = {
+        "manifest.json": json.dumps(
+            {
+                "backbones": [
+                    {
+                        "name": "ours_rn50",
+                        "repo_path": "backbone.pt",
+                        "size": len(backbone),
+                        "sha256": hashlib.sha256(backbone).hexdigest(),
+                    }
+                ]
+            }
+        ).encode(),
+        "backbone.pt": backbone,
+        "checkpoint_050000.pt": policy,
+    }
+
+    def fake_download(**kwargs: object) -> str:
+        filename = str(kwargs["filename"])
+        path = tmp_path / filename
+        path.write_bytes(files[filename])
+        return str(path)
+
+    config = {
+        "model_hub": {
+            "repository": "owner/repo",
+            "revision": "c" * 40,
+            "backbone_manifest": "manifest.json",
+            "policy_checkpoint_template": "checkpoint_050000.pt",
+            "policy_metrics_template": None,
+            "supported_backbones": ["ours_rn50"],
+            "supported_demonstrations": [100],
+        }
+    }
+
+    assets = resolve_model_assets(
+        config,
+        "ours_rn50",
+        100,
+        download_file=fake_download,
+    )
+
+    assert assets.policy_path.read_bytes() == policy
+    assert assets.metrics_path is None
+    assert assets.to_json_dict()["metrics_path"] is None

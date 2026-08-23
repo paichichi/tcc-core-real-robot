@@ -4,7 +4,12 @@
 from __future__ import annotations
 
 import argparse
+import itertools
+import select
+import sys
+import termios
 import time
+import tty
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -84,6 +89,24 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--device", default="auto")
     parser.add_argument("--max-steps", type=int)
+    parser.add_argument(
+        "--run-until-stopped",
+        action="store_true",
+        help=(
+            "Keep a bounded real-robot policy rollout running until the operator "
+            "presses q. This mode has no step limit, retains every action/driver "
+            "safety check, and requires --execute-policy."
+        ),
+    )
+    parser.add_argument(
+        "--watchdog-seconds",
+        type=float,
+        default=300.0,
+        help=(
+            "Wall-clock watchdog for --run-until-stopped (default: 300 seconds). "
+            "This is independent of the policy step count."
+        ),
+    )
     parser.add_argument("--warmup-frames", type=int, default=10)
     parser.add_argument("--camera-startup-delay", type=float, default=1.0)
     parser.add_argument("--camera-read-attempts", type=int, default=3)
@@ -166,6 +189,38 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     return parser.parse_args()
+
+
+class OperatorStopMonitor:
+    """Poll a terminal for q without blocking the control loop."""
+
+    def __init__(self, enabled: bool, stream: Any = None) -> None:
+        self.enabled = enabled
+        self.stream = stream if stream is not None else sys.stdin
+        self.fd: int | None = None
+        self.original_attributes: list[Any] | None = None
+
+    def start(self) -> bool:
+        if not self.enabled or not self.stream.isatty():
+            return False
+        self.fd = self.stream.fileno()
+        self.original_attributes = termios.tcgetattr(self.fd)
+        tty.setcbreak(self.fd)
+        return True
+
+    def stop_requested(self) -> bool:
+        if self.fd is None:
+            return False
+        readable, _, _ = select.select([self.stream], [], [], 0.0)
+        if not readable:
+            return False
+        return self.stream.read(1).lower() == "q"
+
+    def close(self) -> None:
+        if self.fd is not None and self.original_attributes is not None:
+            termios.tcsetattr(self.fd, termios.TCSADRAIN, self.original_attributes)
+        self.fd = None
+        self.original_attributes = None
 
 
 def _camera_source(value: str) -> int | str:
@@ -488,6 +543,12 @@ def main() -> None:
         raise SystemExit("--camera-max-pair-skew-ms must be positive")
     if args.controller_timeout <= 0:
         raise SystemExit("--controller-timeout must be positive")
+    if args.watchdog_seconds <= 0:
+        raise SystemExit("--watchdog-seconds must be positive")
+    if args.run_until_stopped and not args.execute_policy:
+        raise SystemExit("--run-until-stopped requires --execute-policy")
+    if args.run_until_stopped and args.max_steps is not None:
+        raise SystemExit("--run-until-stopped cannot be combined with --max-steps")
     if args.action_ema_alpha is not None and not 0.0 < args.action_ema_alpha <= 1.0:
         raise SystemExit("--action-ema-alpha must be in (0, 1]")
     config = load_yaml(args.config)
@@ -501,7 +562,7 @@ def main() -> None:
     if args.execute_policy:
         args.execute_home = True
         args.execute_clipped_step = True
-        if args.max_steps is None:
+        if args.max_steps is None and not args.run_until_stopped:
             args.max_steps = int(config["evaluation"]["max_rollout_steps"])
     if args.supervised_bounded_test and not args.execute_policy:
         raise SystemExit("--supervised-bounded-test requires --execute-policy")
@@ -528,7 +589,9 @@ def main() -> None:
             raise SystemExit("--execute-clipped-step requires --execute-home")
         clipped_settings = robot_config["policy_evaluation"]["clipped_rollout"]
         clipped_max_steps = int(clipped_settings["max_steps"])
-        if args.max_steps is None or not 1 <= args.max_steps <= clipped_max_steps:
+        if not args.run_until_stopped and (
+            args.max_steps is None or not 1 <= args.max_steps <= clipped_max_steps
+        ):
             raise SystemExit(
                 "--execute-clipped-step requires --max-steps within "
                 f"[1, {clipped_max_steps}]"
@@ -554,8 +617,10 @@ def main() -> None:
         if args.execute_clipped_step
         else dataset_rollout_steps
     )
-    max_steps = args.max_steps or dataset_rollout_steps
-    if not 1 <= max_steps <= max_allowed_steps:
+    max_steps = (
+        None if args.run_until_stopped else args.max_steps or dataset_rollout_steps
+    )
+    if max_steps is not None and not 1 <= max_steps <= max_allowed_steps:
         raise ValueError(f"--max-steps must be within [1, {max_allowed_steps}]")
     fps = float(config["observations"]["fps"])
     evaluation_settings = robot_config["policy_evaluation"]
@@ -692,6 +757,9 @@ def main() -> None:
     max_observed_arm_velocity = 0.0
     max_observed_gripper_velocity = 0.0
     action_filter: Any | None = None
+    operator_monitor = OperatorStopMonitor(args.run_until_stopped)
+    operator_keyboard_available = False
+    stop_reason = ""
     dataset_action_min: list[float] | None = None
     dataset_action_max: list[float] | None = None
     if args.execute_clipped_step:
@@ -799,7 +867,11 @@ def main() -> None:
             f"{'ENABLED' if force_first_action_home else 'DISABLED'}\n"
         )
         report.write(f"GMM inference override: {args.gmm_inference}\n")
-        report.write(f"Maximum steps: {max_steps}\n\n")
+        if args.run_until_stopped:
+            report.write("Maximum steps: UNBOUNDED (operator-controlled)\n")
+            report.write(f"Wall-clock watchdog: {args.watchdog_seconds:.3f} s\n\n")
+        else:
+            report.write(f"Maximum steps: {max_steps}\n\n")
         if dataset_action_min is not None and dataset_action_max is not None:
             report.write(f"Dataset action minimum: {dataset_action_min}\n")
             report.write(f"Dataset action maximum: {dataset_action_max}\n\n")
@@ -956,7 +1028,28 @@ def main() -> None:
                             ),
                         )
                 rollout_started = time.monotonic()
-                for step in range(max_steps):
+                operator_keyboard_available = operator_monitor.start()
+                if args.run_until_stopped:
+                    print(
+                        "Continuous bounded rollout started. Press q to stop cleanly; "
+                        "Ctrl-C also triggers driver cleanup."
+                    )
+                    if not operator_keyboard_available:
+                        print(
+                            "stdin is not an interactive terminal; q is unavailable. "
+                            "Use Ctrl-C or the physical emergency stop."
+                        )
+                step_iterator = (
+                    itertools.count() if args.run_until_stopped else range(max_steps)
+                )
+                for step in step_iterator:
+                    if args.run_until_stopped:
+                        if operator_monitor.stop_requested():
+                            stop_reason = "operator_q"
+                            break
+                        if time.monotonic() - rollout_started >= args.watchdog_seconds:
+                            stop_reason = "watchdog"
+                            break
                     deadline = rollout_started + step * period
                     delay = deadline - time.monotonic()
                     if delay > 0:
@@ -1134,6 +1227,7 @@ def main() -> None:
                         f"pair_skew_ms={cameras.last_pair_skew_ms:.3f} "
                         f"action=[{values}]\n"
                     )
+                operator_monitor.close()
             if args.execute_clipped_step and bounded_steps:
                 if home_session is None:
                     raise RuntimeError(
@@ -1164,6 +1258,7 @@ def main() -> None:
         except Exception as exc:  # noqa: BLE001 - preserve a hardware-side report
             failure = f"{type(exc).__name__}: {exc}"
         finally:
+            operator_monitor.close()
             if home_session is not None:
                 try:
                     home_session.close()
@@ -1212,8 +1307,13 @@ def main() -> None:
                 inference_rate = observed_rate
                 control_rate = observed_rate
                 minimum_rate_met = observed_rate >= minimum_rate_hz
+            rollout_finished_as_requested = (
+                stop_reason in {"operator_q", "watchdog"}
+                if args.run_until_stopped
+                else completed == max_steps
+            )
             checks = {
-                "all_steps_completed": completed == max_steps,
+                "all_steps_completed": rollout_finished_as_requested,
                 "minimum_rate_met": minimum_rate_met,
                 "home_staging_completed": home_reference is not None,
                 "camera_pair_skew_safe": len(pair_skews_ms) == completed
@@ -1243,7 +1343,7 @@ def main() -> None:
                 checks.update(
                     {
                         "clipped_rollout_completed": len(bounded_steps) == completed
-                        and completed == max_steps,
+                        and rollout_finished_as_requested,
                         "first_command_home_anchored": (
                             not force_first_action_home
                             or (
@@ -1304,7 +1404,12 @@ def main() -> None:
                     "final_tracking_safe",
                 )
                 if all(checks[name] for name in execution_checks):
-                    decision = "CLIPPED_ROLLOUT_COMPLETE_RAW_POLICY_BLOCKED"
+                    if stop_reason == "operator_q":
+                        decision = "OPERATOR_STOPPED_CLEANLY"
+                    elif stop_reason == "watchdog":
+                        decision = "WATCHDOG_STOPPED_CLEANLY"
+                    else:
+                        decision = "CLIPPED_ROLLOUT_COMPLETE_RAW_POLICY_BLOCKED"
                     exit_ok = True
                 else:
                     decision = "BLOCKED"
@@ -1314,7 +1419,10 @@ def main() -> None:
             else:
                 decision = "BLOCKED"
             report.write("\nSummary\n")
-            report.write(f"Completed steps: {completed}/{max_steps}\n")
+            step_target = "unbounded" if args.run_until_stopped else str(max_steps)
+            report.write(f"Completed steps: {completed}/{step_target}\n")
+            if args.run_until_stopped:
+                report.write(f"Stop reason: {stop_reason or 'abnormal_exit'}\n")
             if args.execute_clipped_step:
                 report.write(f"End-to-end elapsed including motion: {elapsed:.6f} s\n")
                 report.write(

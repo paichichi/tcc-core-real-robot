@@ -318,3 +318,10 @@ strawberry
 `--execute-home` 只执行回 home；`--execute-policy` 才会启用经过裁剪的真实 rollout，
 且必须同时给出 `--emergency-stop-ready`。不要使用保留参数 `--execute`。程序退出时
 会调用官方 driver cleanup 并恢复 Idle。新版 policy 不绕过任何现有动作边界。
+
+持续人工监督模式使用 `--run-until-stopped`，且不能同时指定 `--max-steps`。该模式
+没有 policy 步数终点，按 `q` 后完成最后目标校验并恢复 Idle；`Ctrl-C` 也会触发
+driver cleanup。默认仍有 300 秒 wall-clock watchdog，可通过
+`--watchdog-seconds` 显式设置。动作 envelope、逐步限幅、command lead、速度检查、
+相机 watchdog 和官方 driver cleanup 均保持启用。当前 V10 没有 success head，因此
+这个模式是“运行到人工停止”，不是“自动判断任务完成”。

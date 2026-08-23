@@ -36,6 +36,30 @@ def test_real_policy_preset_has_short_fixed_defaults(monkeypatch) -> None:
     assert args.offline is True
     assert args.execute_policy is True
     assert args.emergency_stop_ready is True
+    assert args.run_until_stopped is False
+    assert args.watchdog_seconds == 300.0
+
+
+def test_operator_controlled_rollout_arguments(monkeypatch) -> None:
+    module = load_run_policy()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_policy.py",
+            "--execute-policy",
+            "--emergency-stop-ready",
+            "--run-until-stopped",
+            "--watchdog-seconds",
+            "120",
+        ],
+    )
+
+    args = module.parse_args()
+
+    assert args.run_until_stopped is True
+    assert args.max_steps is None
+    assert args.watchdog_seconds == 120.0
 
 
 def test_first_executed_action_is_exact_dataset_home() -> None:
@@ -44,9 +68,7 @@ def test_first_executed_action_is_exact_dataset_home() -> None:
     raw_action = torch.tensor([0.4, 0.3, 0.2, 0.1, -0.1, -0.2, 0.03])
     home = [0.0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.0]
 
-    action, applied = module.apply_first_action_home_anchor(
-        raw_action, 0, home, True
-    )
+    action, applied = module.apply_first_action_home_anchor(raw_action, 0, home, True)
 
     assert applied is True
     assert action.tolist() == pytest.approx(home)

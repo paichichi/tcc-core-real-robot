@@ -38,10 +38,12 @@ backbone:
 
 model_hub:
   repository: Chipaipai/tcc-core-real-robot-policies
-  revision: f17093b59bfcbde9ecb6fc41812767e203adabad
+  revision: a0d945f694a89bc90b1abdf0fe50b85ed89b495e
   backbone_manifest: backbones/manifest.json
-  policy_checkpoint_template: policies_v10_shared_rn50_main_wrist_residual/{backbone}/checkpoint_015000.pt
-  policy_metrics_template: policies_v10_shared_rn50_main_wrist_residual/{backbone}/metrics.json
+  policy_checkpoint_template: policies_v10_shared_rn50_main_wrist_residual/{backbone}/checkpoint_050000.pt
+  # The final 50K Hub release contains the deployable checkpoint but no metrics file.
+  # Runtime loading does not consume training metrics, so this artifact is optional.
+  policy_metrics_template: null
   supported_backbones: [ours_rn50]
   supported_demonstrations: [100]
 

@@ -24,12 +24,13 @@ class ResolvedModelAssets:
     backbone_sha256: str
     policy_path: Path
     policy_sha256: str
-    metrics_path: Path
+    metrics_path: Path | None
 
     def to_json_dict(self) -> dict[str, Any]:
         result = asdict(self)
         for key in ("backbone_path", "policy_path", "metrics_path"):
-            result[key] = str(result[key])
+            if result[key] is not None:
+                result[key] = str(result[key])
         return result
 
 
@@ -88,9 +89,7 @@ def resolve_backbone_asset(
         local_files_only,
     )
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    entries = {
-        str(row["name"]): row for row in manifest.get("backbones", [])
-    }
+    entries = {str(row["name"]): row for row in manifest.get("backbones", [])}
     if backbone not in entries:
         raise ValueError(f"Backbone {backbone!r} is missing from the Hub manifest")
     entry = entries[backbone]
@@ -129,9 +128,7 @@ def resolve_model_assets(
 ) -> ResolvedModelAssets:
     """Resolve one verified backbone and its matching trained policy head."""
     hub = config["model_hub"]
-    supported_demonstrations = {
-        int(value) for value in hub["supported_demonstrations"]
-    }
+    supported_demonstrations = {int(value) for value in hub["supported_demonstrations"]}
     if demonstrations not in supported_demonstrations:
         raise ValueError(
             f"Unsupported demonstration count {demonstrations}; expected one of "
@@ -158,13 +155,18 @@ def resolve_model_assets(
         cache_dir,
         local_files_only,
     )
-    metrics_path = _download(
-        download_file,
-        repository,
-        revision,
-        str(hub["policy_metrics_template"]).format(**template_values),
-        cache_dir,
-        local_files_only,
+    metrics_template = hub.get("policy_metrics_template")
+    metrics_path = (
+        _download(
+            download_file,
+            repository,
+            revision,
+            str(metrics_template).format(**template_values),
+            cache_dir,
+            local_files_only,
+        )
+        if metrics_template
+        else None
     )
     return ResolvedModelAssets(
         repository=repository,

@@ -294,9 +294,7 @@ def test_v9_is_minimal_r3m_with_independent_camera_encoders() -> None:
     config = load_yaml(ROOT / "configs" / "experiment_v9_r3m_robomimic_100.yaml")
     policy = config["policy"]
 
-    assert policy["architecture"] == (
-        "r3m_deterministic_mlp_dual_independent_encoder"
-    )
+    assert policy["architecture"] == ("r3m_deterministic_mlp_dual_independent_encoder")
     assert policy["architecture_reference"] == (
         "r3m_mlp_plus_robomimic_independent_camera_encoders"
     )
@@ -356,9 +354,7 @@ def test_v9_proprio_adds_closed_loop_state_without_changing_action_contract() ->
     assert policy["proprioception_dim"] == 7
     assert policy["normalize_state"] is True
     assert policy["proprioception_dropout"] == 0.1
-    assert policy["state_representation"] == (
-        "measured_joint_position_6_plus_gripper"
-    )
+    assert policy["state_representation"] == ("measured_joint_position_6_plus_gripper")
     assert policy["action_representation"] == "absolute"
     assert policy["action_adapter"] == "trossen_joint_position_passthrough"
     assert config["model_hub"]["policy_checkpoint_template"].startswith(
@@ -375,21 +371,24 @@ def test_v9_proprio_adds_closed_loop_state_without_changing_action_contract() ->
 
 def test_v10_uses_shared_rn50_and_main_dominant_wrist_residual() -> None:
     config = load_yaml(
-        ROOT
-        / "configs"
-        / "experiment_v10_shared_rn50_main_wrist_residual_100.yaml"
+        ROOT / "configs" / "experiment_v10_shared_rn50_main_wrist_residual_100.yaml"
     )
     policy = config["policy"]
 
     assert config["model_hub"]["supported_backbones"] == ["ours_rn50"]
+    assert config["model_hub"]["revision"] == (
+        "a0d945f694a89bc90b1abdf0fe50b85ed89b495e"
+    )
+    assert config["model_hub"]["policy_checkpoint_template"].endswith(
+        "checkpoint_050000.pt"
+    )
+    assert config["model_hub"]["policy_metrics_template"] is None
     assert config["backbone"]["frozen"] is False
     assert config["backbone"]["fine_tuning"] == (
         "shared_full_end_to_end_freeze_batch_norm_statistics"
     )
     assert policy["shared_camera_backbone"] is True
-    assert policy["camera_fusion"] == (
-        "main_policy_with_gated_wrist_action_residual"
-    )
+    assert policy["camera_fusion"] == ("main_policy_with_gated_wrist_action_residual")
     assert policy["proprioception"] is True
     assert policy["action_representation"] == "absolute"
     assert config["dataset"]["action_leads_measured_state_frames"] == 2
