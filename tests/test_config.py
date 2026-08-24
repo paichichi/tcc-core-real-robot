@@ -164,6 +164,7 @@ def test_v11_end_to_end_uses_act_episode_split_and_trainable_rn50() -> None:
     assert config["backbone"]["fine_tuning"] == (
         "full_end_to_end_freeze_batch_norm_statistics"
     )
+    assert len(config["model_hub"]["revision"]) == 40
     assert policy["cameras"] == ["cam_main"]
     assert policy["action_chunk_size"] == 40
     assert policy["action_steps_per_inference"] == 10
