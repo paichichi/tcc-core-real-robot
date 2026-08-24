@@ -155,6 +155,30 @@ def test_v11_is_a_basic_single_view_absolute_chunked_mlp() -> None:
     }
 
 
+def test_v11_end_to_end_uses_act_episode_split_and_trainable_rn50() -> None:
+    config = load_yaml(ROOT / "configs" / "experiment_v11_end_to_end_rn50_100.yaml")
+    policy = config["policy"]
+
+    assert config["backbone"]["hub_name"] == "ours_rn50"
+    assert config["backbone"]["frozen"] is False
+    assert config["backbone"]["fine_tuning"] == (
+        "full_end_to_end_freeze_batch_norm_statistics"
+    )
+    assert policy["cameras"] == ["cam_main"]
+    assert policy["action_chunk_size"] == 40
+    assert policy["action_steps_per_inference"] == 10
+    assert policy["head_learning_rate"] == 1e-4
+    assert policy["backbone_learning_rate"] == 1e-5
+    assert config["split"] == {
+        "protocol": "act_train_validation_episode_holdout",
+        "shuffle_seed": 3904767649,
+        "train_episodes_per_task": 80,
+        "validation_episodes_per_task": 20,
+        "test_episodes_per_task": 0,
+        "unused_episodes_per_task": 0,
+    }
+
+
 def test_proprio_absolute_60_policy_configuration() -> None:
     config = load_yaml(ROOT / "configs" / "experiment_proprio_absolute_60.yaml")
     policy = config["policy"]

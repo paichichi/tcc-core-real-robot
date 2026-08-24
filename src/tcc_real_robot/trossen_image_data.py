@@ -110,10 +110,15 @@ def episode_split_indices(
 ) -> tuple[list[int], list[int], list[int]]:
     """Return leak-free positional indices split by complete episodes."""
     sizes = (train_episodes, validation_episodes, test_episodes)
-    if train_episodes <= 0 or validation_episodes < 0 or test_episodes <= 0:
+    if (
+        train_episodes <= 0
+        or validation_episodes < 0
+        or test_episodes < 0
+        or validation_episodes + test_episodes <= 0
+    ):
         raise ValueError(
-            "Train/test episode splits must be positive and validation cannot "
-            "be negative"
+            "Training must be positive and at least one validation/test split "
+            "must be positive"
         )
     path = Path(database).expanduser().resolve()
     with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as connection:
@@ -236,3 +241,123 @@ class TrossenMultiViewDataset(Dataset[tuple[torch.Tensor, ...]]):
                     )
         tensor = torch.from_numpy(np.stack(vectors))
         return tensor.mean(0), tensor.std(0, unbiased=False)
+
+
+class TrossenSingleViewChunkDataset(Dataset[tuple[torch.Tensor, ...]]):
+    """Main-camera observations paired with episode-local absolute chunks.
+
+    Chunks that reach the end of an episode repeat the final demonstrated
+    absolute joint target. This matches the frozen-feature V11 target contract
+    without crossing an episode boundary.
+    """
+
+    def __init__(
+        self,
+        database: str | Path,
+        transform: Callable[[torch.Tensor], torch.Tensor],
+        *,
+        action_chunk_size: int,
+    ) -> None:
+        if action_chunk_size < 2:
+            raise ValueError("action_chunk_size must be at least two")
+        self.database = Path(database).expanduser().resolve()
+        self.transform = transform
+        self.action_chunk_size = action_chunk_size
+        self._connection: sqlite3.Connection | None = None
+        self.row_ids: list[int] = []
+        self.row_keys: list[tuple[int, int, int]] = []
+        actions: dict[tuple[int, int], list[tuple[int, torch.Tensor]]] = {}
+        with self._connect() as connection:
+            for row_id, task, episode, frame, action_bytes in connection.execute(
+                "SELECT id, task_index, episode_index, frame_index, action "
+                "FROM samples WHERE split = 'train' ORDER BY id"
+            ):
+                key = (int(task), int(episode))
+                action = torch.from_numpy(
+                    np.frombuffer(action_bytes, dtype=np.float32).copy()
+                )
+                if action.shape != (7,) or not torch.isfinite(action).all():
+                    raise ValueError("Trossen action must be finite and seven-dimensional")
+                self.row_ids.append(int(row_id))
+                self.row_keys.append((*key, int(frame)))
+                actions.setdefault(key, []).append((int(frame), action))
+        if not self.row_ids:
+            raise ValueError(f"No samples in {self.database}")
+        self.episode_actions: dict[tuple[int, int], torch.Tensor] = {}
+        for key, rows in actions.items():
+            rows.sort(key=lambda item: item[0])
+            frames = [frame for frame, _ in rows]
+            if frames != list(range(len(rows))):
+                raise ValueError(f"Episode {key} is not contiguous")
+            self.episode_actions[key] = torch.stack([action for _, action in rows])
+
+    def _connect(self) -> sqlite3.Connection:
+        return sqlite3.connect(f"file:{self.database}?mode=ro", uri=True)
+
+    def _get_connection(self) -> sqlite3.Connection:
+        if self._connection is None:
+            self._connection = self._connect()
+        return self._connection
+
+    def __getstate__(self) -> dict[str, object]:
+        state = self.__dict__.copy()
+        state["_connection"] = None
+        return state
+
+    def __len__(self) -> int:
+        return len(self.row_ids)
+
+    def action_chunk(self, index: int) -> torch.Tensor:
+        task, episode, frame = self.row_keys[index]
+        actions = self.episode_actions[(task, episode)]
+        stop = min(frame + self.action_chunk_size, actions.shape[0])
+        chunk = actions[frame:stop]
+        if chunk.shape[0] < self.action_chunk_size:
+            chunk = torch.cat(
+                [
+                    chunk,
+                    actions[-1:].expand(self.action_chunk_size - chunk.shape[0], -1),
+                ],
+                dim=0,
+            )
+        return chunk.flatten()
+
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, ...]:
+        row = self._get_connection().execute(
+            "SELECT jpeg_main, state, task_index FROM samples WHERE id = ?",
+            (self.row_ids[index],),
+        ).fetchone()
+        if row is None:
+            raise IndexError(index)
+        encoded = torch.from_numpy(np.frombuffer(row[0], dtype=np.uint8).copy())
+        image = self.transform(decode_jpeg(encoded, mode="RGB"))
+        state = torch.from_numpy(np.frombuffer(row[1], dtype=np.float32).copy())
+        if state.shape != (7,) or not torch.isfinite(state).all():
+            raise ValueError("Trossen state must be finite and seven-dimensional")
+        return image, state, self.action_chunk(index), torch.tensor(int(row[2]))
+
+    def state_statistics(
+        self, indices: Sequence[int]
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if not indices:
+            raise ValueError("State statistics require training samples")
+        selected_ids = {self.row_ids[index] for index in indices}
+        vectors = []
+        with self._connect() as connection:
+            for row_id, state_bytes in connection.execute(
+                "SELECT id, state FROM samples WHERE split = 'train'"
+            ):
+                if int(row_id) in selected_ids:
+                    vectors.append(
+                        np.frombuffer(state_bytes, dtype=np.float32).copy()
+                    )
+        tensor = torch.from_numpy(np.stack(vectors))
+        return tensor.mean(0), tensor.std(0, unbiased=False)
+
+    def action_statistics(
+        self, indices: Sequence[int]
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if not indices:
+            raise ValueError("Action statistics require training samples")
+        chunks = torch.stack([self.action_chunk(index) for index in indices])
+        return chunks.mean(0), chunks.std(0, unbiased=False)
