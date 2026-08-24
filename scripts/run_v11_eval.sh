@@ -2,6 +2,7 @@
 set -euo pipefail
 
 mode="${1:-shadow}"
+action_ema_alpha="${ACTION_EMA_ALPHA:-0.7}"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
@@ -29,7 +30,7 @@ args=(
   --tcc-source-root "$tcc_source_root"
   --device auto
   --action-steps-per-inference 1
-  --action-ema-alpha 0.3
+  --action-ema-alpha "$action_ema_alpha"
 )
 
 case "$mode" in
