@@ -1,12 +1,14 @@
-# Run from the tcc-core-real-robot repository root.
+cd /home/robotarm/lerobot_trossen
+git fetch origin
+git switch act-lite-official
+git pull --ff-only origin act-lite-official
 
-# Convert/check V11 using the LeRobot policy contract. The robot is not connected.
-bash scripts/run_v11_eval.sh
+cd /home/robotarm/tcc-core-real-robot
+git fetch origin
+git switch v11-basic-chunked-mlp
+git pull --ff-only origin v11-basic-chunked-mlp
 
-# Execute V11 through the official LeRobot/Trossen rollout stack.
-# Keep the E-stop ready.
-# bash scripts/run_v11_eval.sh --execute
-
-# Every invocation writes a launcher .txt under output/. The official conversion/
-# rollout writes its complete .txt under ../lerobot_trossen/output/v11_ours_rn50_*/.
-# If anything fails, send the newest output/v11_launcher_*.txt for diagnosis.
+mkdir -p output
+unset VIRTUAL_ENV
+set -o pipefail
+bash scripts/run_v11_eval.sh --execute 2>&1 | tee output/v11_latest.txt
