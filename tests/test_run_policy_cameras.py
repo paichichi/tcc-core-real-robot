@@ -211,10 +211,17 @@ def test_supervised_bounded_test_uses_verified_replay_and_safety_caps() -> None:
             "max_gripper_delta_m": 0.003,
         },
         "policy_evaluation": {
-            "force_first_action_home": True,
+            "force_first_action_home": False,
             "clipped_rollout": {
-                "max_action_delta": [0.04, 0.06, 0.08, 0.13, 0.05, 0.09, 0.004],
-                "max_command_lead": [0.08, 0.12, 0.16, 0.26, 0.10, 0.18, 0.008],
+                "max_relative_target": [
+                    0.04,
+                    0.06,
+                    0.08,
+                    0.13,
+                    0.05,
+                    0.09,
+                    0.004,
+                ],
                 "min_time_to_move_multiplier": 2.0,
                 "dataset_action_limits": {"task": {"min": [0.0] * 7, "max": [1.0] * 7}},
             },
@@ -224,8 +231,15 @@ def test_supervised_bounded_test_uses_verified_replay_and_safety_caps() -> None:
     module.assert_shadow_only(robot, True, supervised_bounded_test=True)
 
     clipped = robot["policy_evaluation"]["clipped_rollout"]
-    assert clipped["max_action_delta"] == [0.04, 0.06, 0.07, 0.07, 0.05, 0.07, 0.003]
-    assert clipped["max_command_lead"] == [0.08, 0.12, 0.14, 0.14, 0.10, 0.14, 0.006]
+    assert clipped["max_relative_target"] == [
+        0.04,
+        0.06,
+        0.07,
+        0.07,
+        0.05,
+        0.07,
+        0.003,
+    ]
 
 
 class FakeCapture:

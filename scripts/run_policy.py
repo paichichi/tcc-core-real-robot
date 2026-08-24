@@ -417,22 +417,18 @@ def configure_supervised_bounded_test(robot_config: dict[str, Any]) -> None:
     if contract.get("arm_units") != "rad" or contract.get("gripper_units") != "m":
         raise RuntimeError("Supervised rollout requires the verified rad/m contract")
     evaluation = robot_config.get("policy_evaluation", {})
-    if evaluation.get("force_first_action_home") is not True:
-        raise RuntimeError("Supervised rollout requires the first-action home anchor")
     clipped = evaluation.get("clipped_rollout", {})
     if not clipped.get("dataset_action_limits"):
         raise RuntimeError("Supervised rollout requires dataset absolute action limits")
     safety = robot_config.get("safety", {})
     arm_cap = float(safety["max_joint_delta_rad"])
     gripper_cap = float(safety["max_gripper_delta_m"])
-    configured = [float(value) for value in clipped["max_action_delta"]]
+    configured = [float(value) for value in clipped["max_relative_target"]]
     if len(configured) != 7 or arm_cap <= 0 or gripper_cap <= 0:
         raise RuntimeError("Supervised rollout safety limits are invalid")
     bounded = [min(value, arm_cap) for value in configured[:6]]
     bounded.append(min(configured[6], gripper_cap))
-    multiplier = float(clipped["min_time_to_move_multiplier"])
-    clipped["max_action_delta"] = bounded
-    clipped["max_command_lead"] = [value * multiplier for value in bounded]
+    clipped["max_relative_target"] = bounded
 
 
 def assert_shadow_only(
@@ -856,11 +852,11 @@ def main() -> None:
             report.write("Policy command blocking: False (official continuous mode)\n")
             report.write(f"Policy command goal time: {goal_time:.3f} s\n")
             report.write(
-                "Policy command shaping: stateful previous-command slew with "
-                "measured-position lead cap\n"
+                "Policy command shaping: official measured-position direct clipping\n"
             )
             report.write(
-                f"Policy maximum command lead: {clipped['max_command_lead']}\n"
+                "Policy maximum relative target: "
+                f"{clipped['max_relative_target']}\n"
             )
         report.write(f"Inference warmup steps: {inference_warmup_steps}\n")
         report.write(
@@ -1210,10 +1206,10 @@ def main() -> None:
                             f"{bounded_step.max_commanded_arm_delta_rad:.7f}\n"
                             f"step={step:03d} commanded_gripper_delta_m="
                             f"{bounded_step.commanded_gripper_delta_m:.7f}\n"
-                            f"step={step:03d} commanded_max_arm_lead_rad="
-                            f"{bounded_step.max_arm_command_lead_rad:.7f}\n"
-                            f"step={step:03d} commanded_gripper_lead_m="
-                            f"{bounded_step.gripper_command_lead_m:.7f}\n"
+                            f"step={step:03d} max_arm_relative_target_rad="
+                            f"{bounded_step.max_arm_relative_target_rad:.7f}\n"
+                            f"step={step:03d} gripper_relative_target_m="
+                            f"{bounded_step.gripper_relative_target_m:.7f}\n"
                             f"step={step:03d} arm_immediate_command_gap_rad="
                             f"{bounded_step.max_arm_command_gap_rad:.7f}\n"
                             f"step={step:03d} gripper_immediate_command_gap_m="
@@ -1360,24 +1356,25 @@ def main() -> None:
                             item.max_commanded_arm_delta_rad for item in bounded_steps
                         )
                         <= max(
-                            float(value) for value in clipped["max_action_delta"][:6]
+                            float(value)
+                            for value in clipped["max_relative_target"][:6]
                         )
                         + 1e-9,
                         "commanded_gripper_delta_safe": bool(bounded_steps)
                         and max(
                             item.commanded_gripper_delta_m for item in bounded_steps
                         )
-                        <= float(clipped["max_action_delta"][6]) + 1e-9,
-                        "command_lead_safe": bool(bounded_steps)
+                        <= float(clipped["max_relative_target"][6]) + 1e-9,
+                        "relative_target_safe": bool(bounded_steps)
                         and all(
-                            item.max_arm_command_lead_rad
+                            item.max_arm_relative_target_rad
                             <= max(
                                 float(value)
-                                for value in clipped["max_command_lead"][:6]
+                                for value in clipped["max_relative_target"][:6]
                             )
                             + 1e-9
-                            and item.gripper_command_lead_m
-                            <= float(clipped["max_command_lead"][6]) + 1e-9
+                            and item.gripper_relative_target_m
+                            <= float(clipped["max_relative_target"][6]) + 1e-9
                             for item in bounded_steps
                         ),
                         "official_nonblocking_commands": clipped["command_blocking"]
@@ -1401,7 +1398,7 @@ def main() -> None:
                     "first_command_home_anchored",
                     "commanded_arm_delta_safe",
                     "commanded_gripper_delta_safe",
-                    "command_lead_safe",
+                    "relative_target_safe",
                     "official_nonblocking_commands",
                     "observed_arm_velocity_safe",
                     "observed_gripper_velocity_safe",
@@ -1483,13 +1480,13 @@ def main() -> None:
                     f"{first_command_home_error:.7f}\n"
                 )
                 report.write(
-                    "Maximum commanded arm lead: "
-                    f"{max(item.max_arm_command_lead_rad for item in bounded_steps):.7f} "
+                    "Maximum arm relative target: "
+                    f"{max(item.max_arm_relative_target_rad for item in bounded_steps):.7f} "
                     "rad\n"
                 )
                 report.write(
-                    "Maximum commanded gripper lead: "
-                    f"{max(item.gripper_command_lead_m for item in bounded_steps):.7f} "
+                    "Maximum gripper relative target: "
+                    f"{max(item.gripper_relative_target_m for item in bounded_steps):.7f} "
                     "m\n"
                 )
             report.write("Checks:\n")

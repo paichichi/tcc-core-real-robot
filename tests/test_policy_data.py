@@ -8,10 +8,12 @@ import torch
 
 from tcc_real_robot.policy_data import (
     build_episode_records,
+    canonical_episode_split,
     load_cached_absolute_chunk_split,
     load_cached_current_delta_split,
     load_cached_future_delta_split,
     load_cached_split,
+    validate_feature_cache_split,
 )
 
 
@@ -35,13 +37,47 @@ def test_absolute_action_chunks_do_not_cross_episode_boundaries(
 
     loaded = load_cached_absolute_chunk_split(tmp_path, "train", 3)
 
-    assert loaded["action"].shape == (6, 21)
+    assert loaded["action"].shape == (10, 21)
     assert torch.equal(
         loaded["action"][0].reshape(3, 7),
         torch.arange(21, dtype=torch.float32).reshape(3, 7),
     )
-    assert loaded["action"][3, 0].item() == 100.0
-    assert loaded["cam_main"][:, 0].tolist() == [0.0] * 3 + [100.0] * 3
+    first_final_action = torch.arange(35, dtype=torch.float32).reshape(5, 7)[-1:]
+    assert torch.equal(
+        loaded["action"][4].reshape(3, 7), first_final_action.expand(3, -1)
+    )
+    assert loaded["action"][5, 0].item() == 100.0
+    assert loaded["cam_main"][:, 0].tolist() == [0.0] * 5 + [100.0] * 5
+
+
+def test_feature_cache_split_contract_tracks_the_actual_shuffle_seed() -> None:
+    split = {
+        "protocol": "episode_holdout",
+        "shuffle_seed": 222,
+        "train_episodes_per_task": 80,
+        "validation_episodes_per_task": 10,
+        "test_episodes_per_task": 10,
+        "unused_episodes_per_task": 0,
+    }
+    contract = canonical_episode_split(split, fallback_seed=111)
+    manifest = {"split": contract, "episode_split_seed": 222}
+
+    validate_feature_cache_split(manifest, split, fallback_seed=111)
+    assert contract["shuffle_seed"] == 222
+
+
+def test_feature_cache_split_rejects_legacy_ambiguous_manifest() -> None:
+    split = {
+        "protocol": "episode_holdout",
+        "shuffle_seed": 222,
+        "train_episodes_per_task": 80,
+        "validation_episodes_per_task": 10,
+        "test_episodes_per_task": 10,
+        "unused_episodes_per_task": 0,
+    }
+
+    with pytest.raises(ValueError, match="predates explicit split-seed tracking"):
+        validate_feature_cache_split({"split": split}, split, fallback_seed=111)
 
 
 def test_episode_split_has_no_frame_level_leakage(tmp_path: Path) -> None:

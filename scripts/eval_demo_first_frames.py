@@ -43,7 +43,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--episodes", type=int, default=10)
     parser.add_argument(
         "--split",
-        choices=("train", "test", "all"),
+        choices=("train", "validation", "test", "all"),
         default="test",
         help="Episode split used by the first-frame deployment gate.",
     )
@@ -109,7 +109,7 @@ def select_records(
     episodes: int,
 ) -> list[EpisodeRecord]:
     """Select an explicit split without silently falling back to train data."""
-    if split not in {"train", "test", "all"}:
+    if split not in {"train", "validation", "test", "all"}:
         raise ValueError(f"Unsupported first-frame split: {split}")
     selected = [
         record

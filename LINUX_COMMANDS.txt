@@ -5,20 +5,20 @@ python scripts/cache_policy_features.py \
   --hub-backbone ours_rn50 \
   --dataset-root datasets/pick_and_place_4_object_diverse \
   --tcc-source-root /home/robotarm/TCC-core \
-  --cache-root runs/feature_cache_v11_basic_chunked_mlp/ours_rn50/100 \
+  --cache-root runs/feature_cache_v11_basic_chunked_mlp/ours_rn50/100_act8020 \
   --device auto
 
 python scripts/train_policy.py \
   --config configs/experiment_v11_basic_chunked_mlp_100.yaml \
-  --cache-root runs/feature_cache_v11_basic_chunked_mlp/ours_rn50/100 \
-  --output-dir runs/policies_v11_basic_chunked_mlp/ours_rn50/100 \
+  --cache-root runs/feature_cache_v11_basic_chunked_mlp/ours_rn50/100_act8020 \
+  --output-dir runs/policies_v11_basic_chunked_mlp/ours_rn50/100_act8020 \
   --device auto
 
 python scripts/run_policy.py \
   --config configs/experiment_v11_basic_chunked_mlp_100.yaml \
   --robot-config configs/robot.yaml \
   --backbone ours_rn50 \
-  --policy-checkpoint runs/policies_v11_basic_chunked_mlp/ours_rn50/100/checkpoint_best.pt \
+  --policy-checkpoint runs/policies_v11_basic_chunked_mlp/ours_rn50/100_act8020/checkpoint_best.pt \
   --demonstrations 100 \
   --task carrot \
   --camera-backend realsense-sdk \

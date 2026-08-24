@@ -122,8 +122,15 @@ def make_config() -> dict:
             "max_home_gripper_error_m": 0.002,
             "clipped_rollout": {
                 "max_steps": 3,
-                "max_action_delta": [0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.001],
-                "max_command_lead": [0.04, 0.04, 0.04, 0.04, 0.04, 0.04, 0.002],
+                "max_relative_target": [
+                    0.02,
+                    0.02,
+                    0.02,
+                    0.02,
+                    0.02,
+                    0.02,
+                    0.001,
+                ],
                 "max_cumulative_joint_delta_rad": 0.06,
                 "max_cumulative_gripper_delta_m": 0.003,
                 "control_fps": 20.0,
@@ -219,7 +226,7 @@ def test_bounded_policy_steps_stop_at_cumulative_home_envelope() -> None:
     session.close()
 
 
-def test_bounded_policy_commands_advance_while_measurement_lags() -> None:
+def test_bounded_policy_commands_do_not_advance_while_measurement_lags() -> None:
     driver = FakeHomeDriver()
     session = PolicyHomeSession(make_api(driver), make_config(), timeout=20.0)
     preparation = session.prepare()
@@ -242,9 +249,7 @@ def test_bounded_policy_commands_advance_while_measurement_lags() -> None:
         session.execute_bounded_policy_step([3.0] * 7, reference) for _ in range(4)
     ]
 
-    assert [result.commanded[0] for result in results] == pytest.approx(
-        [0.02, 0.04, 0.04, 0.04]
-    )
+    assert [result.commanded[0] for result in results] == pytest.approx([0.02] * 4)
     assert all(result.max_commanded_arm_delta_rad <= 0.02 + 1e-9 for result in results)
     session.close()
 

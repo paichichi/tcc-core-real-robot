@@ -17,6 +17,8 @@ from tcc_real_robot.model_assets import resolve_backbone_asset
 from tcc_real_robot.policy_data import (
     build_episode_records,
     cache_shard_path,
+    canonical_episode_split,
+    validate_feature_cache_split,
 )
 from tcc_real_robot.policy_runtime import preprocess_rgb_frames, resolve_device
 from tcc_real_robot.tcc_backbone import load_frozen_tcc_backbone
@@ -117,7 +119,7 @@ def main() -> None:
     print(f"Feature extraction device: {device}")
     backbone, metadata = load_frozen_tcc_backbone(checkpoint, source_root, device)
 
-    split = config["split"]
+    split = dict(config["split"])
     if args.train_episodes_per_task is not None:
         if not 1 <= args.train_episodes_per_task <= int(
             config["dataset"]["demonstrations_per_task"]
@@ -134,10 +136,26 @@ def main() -> None:
             raise ValueError(
                 "Requested train/validation/test episodes exceed the dataset"
             )
+    split_contract = canonical_episode_split(split, fallback_seed=int(config["seed"]))
+    episode_split_seed = int(split_contract["shuffle_seed"])
+    manifest_path = cache_root / "manifest.json"
+    if manifest_path.is_file():
+        validate_feature_cache_split(
+            json.loads(manifest_path.read_text()),
+            split,
+            fallback_seed=int(config["seed"]),
+        )
+    elif cache_root.is_dir() and any(
+        cache_root.glob("*/task_*/episode_*.pt")
+    ):
+        raise ValueError(
+            "Feature-cache shards exist without a manifest. Use a clean cache root "
+            "so stale episodes cannot contaminate the requested split."
+        )
     records = build_episode_records(
         dataset_root=dataset_root,
         task_names=list(config["dataset"]["tasks"]),
-        seed=int(config["seed"]),
+        seed=episode_split_seed,
         split_sizes=(
             int(split["train_episodes_per_task"]),
             int(split["validation_episodes_per_task"]),
@@ -220,11 +238,12 @@ def main() -> None:
             }
             for record in records
         ],
-        "split": dict(split),
+        "split": split_contract,
+        "episode_split_seed": episode_split_seed,
         "policy_cameras": list(policy_cameras),
         "policy_actuation": False,
     }
-    (cache_root / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
 
 
 if __name__ == "__main__":

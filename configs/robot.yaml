@@ -99,10 +99,9 @@ policy_evaluation:
   max_home_gripper_error_m: 0.002
   inference_warmup_steps: 3
   minimum_observed_rate_hz: 18.0
-  # Keep the first executed command at the exact configured dataset home while
-  # still recording the first raw prediction. Subsequent steps remain visual
-  # closed-loop policy actions.
-  force_first_action_home: true
+  # Official ACT/Trossen behavior: the first raw policy target is executed
+  # through the same measured-position relative clip as every later target.
+  force_first_action_home: false
   # Preserve collection timing. alpha=1 leaves the policy target unchanged;
   # Driver interpolation and all rollout limits remain active.
   action_ema_alpha: 1.0
@@ -110,14 +109,9 @@ policy_evaluation:
     # Permit an explicitly requested rollout beyond the 359-frame dataset
     # horizon for diagnostics. All action and tracking limits remain active.
     max_steps: 900
-    # Per-frame maxima across all 35,900 carrot frames. These preserve the
-    # demonstrated dynamics while rejecting targets outside dataset support.
-    max_action_delta:
-      [0.04615854099392891, 0.060654640197753906, 0.08506894111633301, 0.13237200677394867, 0.0644693672657013, 0.08545053005218506, 0.004429406486451626]
-    # Two 20 Hz command periods match the collector's 0.1 s interpolation.
-    # This caps how far the command stream may run ahead of measured motion.
-    max_command_lead:
-      [0.09231708198785782, 0.12130928039550781, 0.17013788223266602, 0.26474401354789734, 0.1289387345314026, 0.17090106010437012, 0.008858812972903252]
+    # Match the official LeRobot Trossen follower: independently clip each
+    # absolute target to the currently measured position +/- this amount.
+    max_relative_target: [0.07, 0.07, 0.07, 0.07, 0.07, 0.07, 0.003]
     dataset_action_limits:
       pick_and_place_carrot_100:
         min: [-0.6322957, 0.5960556, 0.5220493, -1.5905623, -0.2038987, -0.9504463, -0.0004923]

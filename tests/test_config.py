@@ -35,30 +35,17 @@ def test_initial_revision_disables_actuation() -> None:
     assert config["policy_evaluation"]["minimum_observed_rate_hz"] == 18.0
     assert config["policy_evaluation"]["camera_capture_fps"] == 30.0
     assert config["policy_evaluation"]["action_ema_alpha"] == 1.0
-    assert config["policy_evaluation"]["force_first_action_home"] is True
+    assert config["policy_evaluation"]["force_first_action_home"] is False
     clipped = config["policy_evaluation"]["clipped_rollout"]
     assert clipped["max_steps"] == 900
-    assert clipped["max_action_delta"] == [
-        0.04615854099392891,
-        0.060654640197753906,
-        0.08506894111633301,
-        0.13237200677394867,
-        0.0644693672657013,
-        0.08545053005218506,
-        0.004429406486451626,
-    ]
-    assert clipped["max_command_lead"] == [
-        0.09231708198785782,
-        0.12130928039550781,
-        0.17013788223266602,
-        0.26474401354789734,
-        0.1289387345314026,
-        0.17090106010437012,
-        0.008858812972903252,
-    ]
-    assert clipped["max_command_lead"] == [
-        value * clipped["min_time_to_move_multiplier"]
-        for value in clipped["max_action_delta"]
+    assert clipped["max_relative_target"] == [
+        0.07,
+        0.07,
+        0.07,
+        0.07,
+        0.07,
+        0.07,
+        0.003,
     ]
     assert clipped["max_tracking_error"] == [
         0.02,
@@ -154,6 +141,18 @@ def test_v11_is_a_basic_single_view_absolute_chunked_mlp() -> None:
     assert policy["input_layer_norm"] is False
     assert policy["loss"] == "mse"
     assert policy["dropout"] == 0.0
+    assert policy["training_steps"] == 40000
+    assert config["model_hub"]["policy_checkpoint_template"].endswith(
+        "checkpoint_040000.pt"
+    )
+    assert config["split"] == {
+        "protocol": "act_train_validation_episode_holdout",
+        "shuffle_seed": 3904767649,
+        "train_episodes_per_task": 80,
+        "validation_episodes_per_task": 20,
+        "test_episodes_per_task": 0,
+        "unused_episodes_per_task": 0,
+    }
 
 
 def test_proprio_absolute_60_policy_configuration() -> None:

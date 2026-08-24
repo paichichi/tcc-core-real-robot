@@ -10,6 +10,43 @@ from typing import Any
 
 import torch
 
+SPLIT_COUNT_KEYS = (
+    "train_episodes_per_task",
+    "validation_episodes_per_task",
+    "test_episodes_per_task",
+    "unused_episodes_per_task",
+)
+
+
+def canonical_episode_split(
+    split: dict[str, Any], *, fallback_seed: int
+) -> dict[str, Any]:
+    """Return the complete, typed episode-split contract stored in a cache."""
+    return {
+        "protocol": str(split["protocol"]),
+        "shuffle_seed": int(split.get("shuffle_seed", fallback_seed)),
+        **{key: int(split[key]) for key in SPLIT_COUNT_KEYS},
+    }
+
+
+def validate_feature_cache_split(
+    manifest: dict[str, Any],
+    split: dict[str, Any],
+    *,
+    fallback_seed: int,
+) -> None:
+    """Reject stale caches whose recorded episode membership is ambiguous."""
+    expected = canonical_episode_split(split, fallback_seed=fallback_seed)
+    cached = manifest.get("split")
+    cached_seed = manifest.get("episode_split_seed")
+    if cached != expected or cached_seed != expected["shuffle_seed"]:
+        raise ValueError(
+            "Feature-cache split does not match the experiment config, or the "
+            "cache predates explicit split-seed tracking: "
+            f"split={cached!r}, episode_split_seed={cached_seed!r}, "
+            f"expected={expected!r}. Rebuild the cache in a clean cache root."
+        )
+
 
 @dataclass(frozen=True)
 class EpisodeRecord:
@@ -142,8 +179,9 @@ def load_cached_absolute_chunk_split(
 ) -> dict[str, torch.Tensor]:
     """Load current observations paired with episode-local absolute action chunks.
 
-    Only complete chunks are retained. This deliberately avoids padding and a
-    mask so the basic MLP experiment changes only the prediction horizon.
+    Every observation frame is retained. Chunks extending beyond an episode are
+    padded by repeating its final demonstrated action, which represents a hold
+    target without crossing an episode boundary.
     Targets are flattened from ``[K, 7]`` to ``[K * 7]`` for a linear MLP head.
     """
     if chunk_size < 2:
@@ -170,12 +208,18 @@ def load_cached_absolute_chunk_split(
         if len(lengths) != 1:
             raise ValueError(f"Cached episode tensors have different lengths: {path}")
         frames = lengths.pop()
-        samples = frames - chunk_size + 1
+        samples = frames
         if samples <= 0:
-            raise ValueError(f"Cached episode is shorter than chunk_size: {path}")
+            raise ValueError(f"Cached episode is empty: {path}")
         actions = payload["action"].float()
+        padded_actions = torch.cat(
+            (actions, actions[-1:].expand(chunk_size - 1, -1)), dim=0
+        )
         chunks = torch.stack(
-            [actions[offset : offset + samples] for offset in range(chunk_size)],
+            [
+                padded_actions[offset : offset + samples]
+                for offset in range(chunk_size)
+            ],
             dim=1,
         )
         rows.append(

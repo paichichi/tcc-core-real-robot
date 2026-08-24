@@ -24,6 +24,7 @@ from tcc_real_robot.policy_data import (
     load_cached_current_delta_split,
     load_cached_future_delta_split,
     load_cached_split,
+    validate_feature_cache_split,
 )
 from tcc_real_robot.policy_runtime import resolve_device
 
@@ -204,21 +205,11 @@ def main() -> None:
         raise FileNotFoundError(cache_manifest_path)
     cache_manifest = json.loads(cache_manifest_path.read_text())
     if args.episodes_per_task is None:
-        expected_split = {
-            key: int(config["split"][key])
-            for key in (
-                "train_episodes_per_task",
-                "validation_episodes_per_task",
-                "test_episodes_per_task",
-                "unused_episodes_per_task",
-            )
-        }
-        manifest_split = cache_manifest.get("split")
-        if manifest_split != expected_split:
-            raise ValueError(
-                "Feature-cache split does not match the experiment config: "
-                f"{manifest_split} != {expected_split}. Use a clean cache root."
-            )
+        validate_feature_cache_split(
+            cache_manifest,
+            config["split"],
+            fallback_seed=int(config["seed"]),
+        )
     seed = int(config["seed"])
     random.seed(seed)
     np.random.seed(seed)
@@ -275,6 +266,8 @@ def main() -> None:
     if action_chunk_size < 1:
         raise ValueError("action_chunk_size must be positive")
     uses_proprioception = policy_config.get("proprioception") is True
+    has_offline_test = int(config["split"]["test_episodes_per_task"]) > 0
+    test: dict[str, torch.Tensor] | None = None
     if action_representation == "future_delta":
         if not uses_proprioception:
             raise ValueError("future_delta training requires proprioception")
@@ -288,7 +281,10 @@ def main() -> None:
         validation = load_cached_future_delta_split(
             args.cache_root, "validation", lookahead_frames
         )
-        test = load_cached_future_delta_split(args.cache_root, "test", lookahead_frames)
+        if has_offline_test:
+            test = load_cached_future_delta_split(
+                args.cache_root, "test", lookahead_frames
+            )
     elif action_representation == "current_delta":
         if not uses_proprioception:
             raise ValueError("current_delta training requires proprioception")
@@ -298,7 +294,8 @@ def main() -> None:
             episode_ids_by_task=selected_episode_ids,
         )
         validation = load_cached_current_delta_split(args.cache_root, "validation")
-        test = load_cached_current_delta_split(args.cache_root, "test")
+        if has_offline_test:
+            test = load_cached_current_delta_split(args.cache_root, "test")
     elif action_representation == "absolute":
         if action_chunk_size == 1:
             train = load_cached_split(
@@ -307,7 +304,8 @@ def main() -> None:
                 episode_ids_by_task=selected_episode_ids,
             )
             validation = load_cached_split(args.cache_root, "validation")
-            test = load_cached_split(args.cache_root, "test")
+            if has_offline_test:
+                test = load_cached_split(args.cache_root, "test")
         else:
             train = load_cached_absolute_chunk_split(
                 args.cache_root,
@@ -318,9 +316,10 @@ def main() -> None:
             validation = load_cached_absolute_chunk_split(
                 args.cache_root, "validation", action_chunk_size
             )
-            test = load_cached_absolute_chunk_split(
-                args.cache_root, "test", action_chunk_size
-            )
+            if has_offline_test:
+                test = load_cached_absolute_chunk_split(
+                    args.cache_root, "test", action_chunk_size
+                )
     else:
         raise ValueError(f"Unsupported action_representation: {action_representation}")
     feature_dim = int(train["cam_main"].shape[1])
@@ -521,15 +520,6 @@ def main() -> None:
         raise RuntimeError("No best validation checkpoint was selected")
     final_model_state = copy.deepcopy(model.state_dict())
     model.load_state_dict(best_model_state)
-    test_loss, test_mae = evaluate_policy(
-        model,
-        normalizer,
-        state_normalizer,
-        test,
-        batch_size * 4,
-        device,
-        loss_name,
-    )
 
     conditioning_sensitivity = evaluate_conditioning_sensitivity(
         model,
@@ -539,6 +529,17 @@ def main() -> None:
         batch_size * 4,
         device,
     )
+    test_result: tuple[float, list[float]] | None = None
+    if test is not None:
+        test_result = evaluate_policy(
+            model,
+            normalizer,
+            state_normalizer,
+            test,
+            batch_size * 4,
+            device,
+            loss_name,
+        )
     model.load_state_dict(final_model_state)
 
     torch.save(
@@ -554,20 +555,22 @@ def main() -> None:
         checkpoint_payload(best_model_state, best_step),
         output_dir / f"checkpoint_{steps:06d}.pt",
     )
-    test_metric_name = (
-        "test_delta_mae_at_best"
-        if action_representation in {"future_delta", "current_delta"}
-        else "test_action_mae_at_best"
-    )
     metrics = {
         "history": history,
         "best_validation_step": best_step,
         "loss": loss_name,
         f"best_validation_normalized_{loss_name}": best_validation_loss,
-        f"test_normalized_{loss_name}_at_best": test_loss,
-        test_metric_name: test_mae,
         **conditioning_sensitivity,
     }
+    if test_result is not None:
+        test_loss, test_mae = test_result
+        test_metric_name = (
+            "test_delta_mae_at_best"
+            if action_representation in {"future_delta", "current_delta"}
+            else "test_action_mae_at_best"
+        )
+        metrics[f"test_normalized_{loss_name}_at_best"] = test_loss
+        metrics[test_metric_name] = test_mae
     (output_dir / "metrics.json").write_text(json.dumps(metrics, indent=2) + "\n")
 
 
