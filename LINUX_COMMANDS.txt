@@ -1,50 +1,10 @@
-# V11 ours_rn50 — run from the tcc-core-real-robot repository root.
-# The YAML pins the uploaded policy revision:
-# Chipaipai/tcc-core-real-robot-policies@466bc1e4be7d1899da7281a5d8a30add04bf7e3c
-set -euo pipefail
-source .venv/bin/activate
+# Run from the tcc-core-real-robot repository root.
 
-export TCC_SOURCE_ROOT=/home/robotarm/TCC-core
-export EXPERIMENT_CONFIG=configs/experiment_v11_basic_chunked_mlp_100.yaml
+# Shadow check: moves to dataset home, but does not execute policy actions.
+bash scripts/run_v11_eval.sh shadow
 
-# COPY/PASTE FIRST: download the pinned backbone and V11 policy, connect both
-# cameras, move slowly to dataset home, and run SHADOW ONLY. Policy targets are
-# logged but are not sent to the robot. The first run needs Hugging Face access.
-python scripts/run_policy.py \
-  --config "$EXPERIMENT_CONFIG" \
-  --robot-config configs/robot.yaml \
-  --backbone ours_rn50 \
-  --demonstrations 100 \
-  --task carrot \
-  --camera-backend realsense-sdk \
-  --cam-main-serial 838212073584 \
-  --cam-wrist-serial 409122274608 \
-  --tcc-source-root "$TCC_SOURCE_ROOT" \
-  --online \
-  --device auto \
-  --execute-home \
-  --max-steps 359
+# Supervised 10-step physical test. E-stop must be ready.
+bash scripts/run_v11_eval.sh 10
 
-# PHYSICAL 10-STEP TEST — run separately only after reviewing the shadow report,
-# with direct supervision and the physical E-stop immediately ready. This uses
-# the cached pinned Hub files, official-style measured-position clipping
-# (arm +/-0.07 rad, gripper +/-0.003 m), 20 Hz control and 0.1 s driver timing.
-python scripts/run_policy.py \
-  --config "$EXPERIMENT_CONFIG" \
-  --robot-config configs/robot.yaml \
-  --backbone ours_rn50 \
-  --demonstrations 100 \
-  --task carrot \
-  --camera-backend realsense-sdk \
-  --cam-main-serial 838212073584 \
-  --cam-wrist-serial 409122274608 \
-  --tcc-source-root "$TCC_SOURCE_ROOT" \
-  --offline \
-  --device auto \
-  --execute-policy \
-  --supervised-bounded-test \
-  --emergency-stop-ready \
-  --max-steps 10
-
-# FULL 359-STEP EVAL — use only after the 10-step test is physically stable.
-# Replace --max-steps 10 above with --max-steps 359.
+# Full 359-step evaluation, only after the 10-step test is stable.
+# bash scripts/run_v11_eval.sh 359
