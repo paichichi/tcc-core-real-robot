@@ -1,31 +1,50 @@
+# V11 ours_rn50 — run from the tcc-core-real-robot repository root.
+# The YAML pins the uploaded policy revision:
+# Chipaipai/tcc-core-real-robot-policies@466bc1e4be7d1899da7281a5d8a30add04bf7e3c
+set -euo pipefail
 source .venv/bin/activate
 
-python scripts/cache_policy_features.py \
-  --config configs/experiment_v11_basic_chunked_mlp_100.yaml \
-  --hub-backbone ours_rn50 \
-  --dataset-root datasets/pick_and_place_4_object_diverse \
-  --tcc-source-root /home/robotarm/TCC-core \
-  --cache-root runs/feature_cache_v11_basic_chunked_mlp/ours_rn50/100_act8020 \
-  --device auto
+export TCC_SOURCE_ROOT=/home/robotarm/TCC-core
+export EXPERIMENT_CONFIG=configs/experiment_v11_basic_chunked_mlp_100.yaml
 
-python scripts/train_policy.py \
-  --config configs/experiment_v11_basic_chunked_mlp_100.yaml \
-  --cache-root runs/feature_cache_v11_basic_chunked_mlp/ours_rn50/100_act8020 \
-  --output-dir runs/policies_v11_basic_chunked_mlp/ours_rn50/100_act8020 \
-  --device auto
-
+# COPY/PASTE FIRST: download the pinned backbone and V11 policy, connect both
+# cameras, move slowly to dataset home, and run SHADOW ONLY. Policy targets are
+# logged but are not sent to the robot. The first run needs Hugging Face access.
 python scripts/run_policy.py \
-  --config configs/experiment_v11_basic_chunked_mlp_100.yaml \
+  --config "$EXPERIMENT_CONFIG" \
   --robot-config configs/robot.yaml \
   --backbone ours_rn50 \
-  --policy-checkpoint runs/policies_v11_basic_chunked_mlp/ours_rn50/100_act8020/checkpoint_best.pt \
   --demonstrations 100 \
   --task carrot \
   --camera-backend realsense-sdk \
   --cam-main-serial 838212073584 \
   --cam-wrist-serial 409122274608 \
-  --tcc-source-root /home/robotarm/TCC-core \
-  --offline \
+  --tcc-source-root "$TCC_SOURCE_ROOT" \
+  --online \
   --device auto \
   --execute-home \
   --max-steps 359
+
+# PHYSICAL 10-STEP TEST — run separately only after reviewing the shadow report,
+# with direct supervision and the physical E-stop immediately ready. This uses
+# the cached pinned Hub files, official-style measured-position clipping
+# (arm +/-0.07 rad, gripper +/-0.003 m), 20 Hz control and 0.1 s driver timing.
+python scripts/run_policy.py \
+  --config "$EXPERIMENT_CONFIG" \
+  --robot-config configs/robot.yaml \
+  --backbone ours_rn50 \
+  --demonstrations 100 \
+  --task carrot \
+  --camera-backend realsense-sdk \
+  --cam-main-serial 838212073584 \
+  --cam-wrist-serial 409122274608 \
+  --tcc-source-root "$TCC_SOURCE_ROOT" \
+  --offline \
+  --device auto \
+  --execute-policy \
+  --supervised-bounded-test \
+  --emergency-stop-ready \
+  --max-steps 10
+
+# FULL 359-STEP EVAL — use only after the 10-step test is physically stable.
+# Replace --max-steps 10 above with --max-steps 359.
