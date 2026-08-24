@@ -3,12 +3,9 @@ git fetch origin
 git switch act-lite-official
 git pull --ff-only origin act-lite-official
 
-cd /home/robotarm/tcc-core-real-robot
-git fetch origin
-git switch v11-basic-chunked-mlp
-git pull --ff-only origin v11-basic-chunked-mlp
-
 mkdir -p output
 unset VIRTUAL_ENV
+export TCC_REAL_ROBOT_SOURCE_ROOT=/home/robotarm/tcc-core-real-robot
+export BACKBONE_SOURCE_ROOT=/home/robotarm/TCC-core
 set -o pipefail
-bash scripts/run_v11_eval.sh --execute 2>&1 | tee output/v11_latest.txt
+bash scripts/run_uploaded_v11.sh --execute 2>&1 | tee output/v11_direct_latest.txt
