@@ -7,5 +7,4 @@ mkdir -p output
 unset VIRTUAL_ENV
 export TCC_REAL_ROBOT_SOURCE_ROOT=/home/robotarm/tcc-core-real-robot
 export BACKBONE_SOURCE_ROOT=/home/robotarm/TCC-core
-set -o pipefail
-bash scripts/run_uploaded_v11.sh --execute 2>&1 | tee output/v11_direct_latest.txt
+bash scripts/run_uploaded_v11.sh --execute
