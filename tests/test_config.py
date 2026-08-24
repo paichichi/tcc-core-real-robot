@@ -170,6 +170,10 @@ def test_v11_end_to_end_uses_act_episode_split_and_trainable_rn50() -> None:
     assert policy["action_steps_per_inference"] == 10
     assert policy["head_learning_rate"] == 1e-4
     assert policy["backbone_learning_rate"] == 1e-5
+    assert policy["training_steps"] == 100000
+    assert config["model_hub"]["policy_checkpoint_template"].endswith(
+        "checkpoint_100000.pt"
+    )
     assert config["split"] == {
         "protocol": "act_train_validation_episode_holdout",
         "shuffle_seed": 3904767649,

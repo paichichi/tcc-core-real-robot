@@ -27,7 +27,7 @@ model_hub:
   repository: Chipaipai/tcc-core-real-robot-policies
   revision: 466bc1e4be7d1899da7281a5d8a30add04bf7e3c
   backbone_manifest: backbones/manifest.json
-  policy_checkpoint_template: policies_v11_end_to_end_rn50/ours_rn50/checkpoint_040000.pt
+  policy_checkpoint_template: policies_v11_end_to_end_rn50/ours_rn50/checkpoint_100000.pt
   policy_metrics_template: policies_v11_end_to_end_rn50/ours_rn50/metrics.json
   supported_backbones: [ours_rn50]
   supported_demonstrations: [100]
@@ -71,7 +71,7 @@ policy:
   normalize_actions: true
   optimizer: adamw
   loss: mse
-  training_steps: 40000
+  training_steps: 100000
   batch_size: 32
   head_learning_rate: 0.0001
   backbone_learning_rate: 0.00001
