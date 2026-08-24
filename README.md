@@ -315,11 +315,25 @@ strawberry
 
 ## 安全状态
 
-`--execute-home` 只执行回 home；`--execute-policy` 才会启用经过裁剪的真实 rollout。
-在当前 action contract 已由 359 帧 demo replay 验证、但 workspace 仍处于校准状态时，
-真实 rollout 必须同时给出 `--supervised-bounded-test` 和
-`--emergency-stop-ready`。不要使用保留参数 `--execute`。程序退出时
-会调用官方 driver cleanup 并恢复 Idle。新版 policy 不绕过任何现有动作边界。
+V11 的默认实机入口不再调用本仓库的自定义 rollout。训练 checkpoint 会先通过
+`lerobot_policy_v11` 薄适配器转换为 LeRobot policy，随后由官方
+`lerobot-rollout`、Trossen robot plugin、摄像头、action queue、逐关节安全截断、
+数据记录、回初始位和退出流程完整执行。本仓库仍只负责 V11 训练与 checkpoint
+语义；适配器不修改权重、动作空间或 chunk 配置。
+
+```bash
+# 只转换并检查，不连接机械臂
+bash scripts/run_v11_eval.sh
+
+# 官方实机 rollout
+bash scripts/run_v11_eval.sh --execute
+```
+
+旧版诊断入口仍可直接调用 `scripts/run_policy.py`，但不再是 V11 默认实机路径。
+以下限制只适用于这个旧入口：`--execute-home` 只执行回 home；
+`--execute-policy` 必须同时给出 `--supervised-bounded-test` 和
+`--emergency-stop-ready`，并且旧入口不接受 `--execute`。官方 V11 入口退出时由
+LeRobot/Trossen teardown 回到初始位置并关闭控制器连接。
 
 持续人工监督模式使用 `--run-until-stopped`，且不能同时指定 `--max-steps`。该模式
 没有 policy 步数终点，按 `q` 后完成最后目标校验并恢复 Idle；`Ctrl-C` 也会触发

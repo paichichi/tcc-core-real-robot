@@ -1,13 +1,8 @@
 # Run from the tcc-core-real-robot repository root.
 
-# Shadow check: moves to dataset home, but does not execute policy actions.
-bash scripts/run_v11_eval.sh shadow
+# Convert/check V11 using the LeRobot policy contract. The robot is not connected.
+bash scripts/run_v11_eval.sh
 
-# Responsive 30-step closed-loop physical test (EMA defaults to 0.7). E-stop must be ready.
-bash scripts/run_v11_eval.sh 30
-
-# If 0.7 still feels too slow, disable EMA without editing code:
-# ACTION_EMA_ALPHA=1.0 bash scripts/run_v11_eval.sh 30
-
-# Full 359-step evaluation, only after the 30-step test is stable.
-# bash scripts/run_v11_eval.sh 359
+# Execute V11 through the official LeRobot/Trossen rollout stack.
+# Keep the E-stop ready.
+# bash scripts/run_v11_eval.sh --execute
