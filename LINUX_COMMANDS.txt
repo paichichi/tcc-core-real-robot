@@ -6,3 +6,7 @@ bash scripts/run_v11_eval.sh
 # Execute V11 through the official LeRobot/Trossen rollout stack.
 # Keep the E-stop ready.
 # bash scripts/run_v11_eval.sh --execute
+
+# Every invocation writes a launcher .txt under output/. The official conversion/
+# rollout writes its complete .txt under ../lerobot_trossen/output/v11_ours_rn50_*/.
+# If anything fails, send the newest output/v11_launcher_*.txt for diagnosis.
