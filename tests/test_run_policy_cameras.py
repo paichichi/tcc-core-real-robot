@@ -38,6 +38,7 @@ def test_real_policy_preset_has_short_fixed_defaults(monkeypatch) -> None:
     assert args.emergency_stop_ready is True
     assert args.run_until_stopped is False
     assert args.watchdog_seconds == 300.0
+    assert args.action_steps_per_inference is None
 
 
 def test_operator_controlled_rollout_arguments(monkeypatch) -> None:
@@ -60,6 +61,26 @@ def test_operator_controlled_rollout_arguments(monkeypatch) -> None:
     assert args.run_until_stopped is True
     assert args.max_steps is None
     assert args.watchdog_seconds == 120.0
+
+
+def test_receding_horizon_runtime_overrides(monkeypatch) -> None:
+    module = load_run_policy()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_policy.py",
+            "--action-steps-per-inference",
+            "1",
+            "--action-ema-alpha",
+            "0.3",
+        ],
+    )
+
+    args = module.parse_args()
+
+    assert args.action_steps_per_inference == 1
+    assert args.action_ema_alpha == pytest.approx(0.3)
 
 
 def test_first_executed_action_is_exact_dataset_home() -> None:

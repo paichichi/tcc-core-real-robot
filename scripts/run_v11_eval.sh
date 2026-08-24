@@ -28,13 +28,15 @@ args=(
   --cam-wrist-serial 409122274608
   --tcc-source-root "$tcc_source_root"
   --device auto
+  --action-steps-per-inference 1
+  --action-ema-alpha 0.3
 )
 
 case "$mode" in
   shadow)
     args+=(--online --execute-home --max-steps 359)
     ;;
-  10|359)
+  10|30|359)
     args+=(
       --offline
       --execute-policy
@@ -44,7 +46,7 @@ case "$mode" in
     )
     ;;
   *)
-    echo "usage: $0 {shadow|10|359}" >&2
+    echo "usage: $0 {shadow|10|30|359}" >&2
     exit 2
     ;;
 esac

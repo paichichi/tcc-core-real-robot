@@ -124,6 +124,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--inference-warmup-steps", type=int)
     parser.add_argument(
+        "--action-steps-per-inference",
+        type=int,
+        help=(
+            "Runtime-only override for the number of queued chunk actions. "
+            "Use 1 for receding-horizon closed-loop inference without retraining."
+        ),
+    )
+    parser.add_argument(
         "--action-ema-alpha",
         type=float,
         help=(
@@ -692,6 +700,20 @@ def main() -> None:
         )
     validate_policy_contract(config, bundle)
     checkpoint_policy_config = bundle.config["policy"]
+    checkpoint_action_chunk_size = int(checkpoint_policy_config["action_chunk_size"])
+    runtime_action_steps_per_inference = int(
+        args.action_steps_per_inference
+        if args.action_steps_per_inference is not None
+        else checkpoint_policy_config["action_steps_per_inference"]
+    )
+    if not 1 <= runtime_action_steps_per_inference <= checkpoint_action_chunk_size:
+        raise ValueError(
+            "--action-steps-per-inference must be within "
+            f"[1, {checkpoint_action_chunk_size}]"
+        )
+    checkpoint_policy_config["action_steps_per_inference"] = (
+        runtime_action_steps_per_inference
+    )
     action_representation = checkpoint_policy_config.get(
         "action_representation", "absolute"
     )
@@ -836,6 +858,10 @@ def main() -> None:
             f"Camera maximum pair skew: {args.camera_max_pair_skew_ms:.3f} ms\n"
         )
         report.write(f"Policy rollout rate: {fps:.3f} Hz\n")
+        report.write(
+            "Policy action steps per inference: "
+            f"{runtime_action_steps_per_inference}\n"
+        )
         if args.execute_clipped_step:
             clipped = evaluation_settings["clipped_rollout"]
             action_ema_alpha = float(

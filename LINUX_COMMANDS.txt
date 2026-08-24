@@ -3,8 +3,8 @@
 # Shadow check: moves to dataset home, but does not execute policy actions.
 bash scripts/run_v11_eval.sh shadow
 
-# Supervised 10-step physical test. E-stop must be ready.
-bash scripts/run_v11_eval.sh 10
+# Smoothed 30-step closed-loop physical test. E-stop must be ready.
+bash scripts/run_v11_eval.sh 30
 
-# Full 359-step evaluation, only after the 10-step test is stable.
+# Full 359-step evaluation, only after the 30-step test is stable.
 # bash scripts/run_v11_eval.sh 359
